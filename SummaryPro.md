@@ -240,3 +240,37 @@ Integration with external SDR via TCP for 5.8 GHz coverage
 Remote ID (Broadcast) packet parsing if available
 Multiple Kindle mesh for triangulation
 undefined
+
+| `processDot11Hdr=1` | Writable at runtime BUT instantly kills WiFi |
+|                     | Parameter resets to 0 on reboot                |
+|                     | Incompatible with active network association    |
+
+What's New in v2.1
+Feature	Implementation
+Maxperf re-apply	Every 30 loops (~2.5 min), re-sends --power maxperf since Kindle resets it
+/proc/net/wireless polling	Every loop — reads noise/signal/linkQuality without spawning wmiconfig
+Idle CRC measurement	Every 10 loops: clears stats → 2s idle → reads CRC. Non-zero = external RF!
+External RF alert	Requires 2 consecutive detections (idleCRC > 3) to flag. Decays when clear.
+Display: ** EXTERNAL RF **	Shown on e-ink when idle-CRC detects non-WiFi 2.4GHz activity
+Log: iCRC field	Idle CRC value logged every loop for post-analysis
+Header: LQ field	Link quality from /proc/net/wireless
+Flash on external RF	E-ink full refresh triggered by externalRF flag too
+Detection Layers (Complete)
+
+
+Layer 1: WiFi AP Scan (iwlist)
+  → OUI, SSID, channel, signal, hidden, mode
+
+Layer 2: Temporal Analysis (in-memory)
+  → NEW, MOV, HOP, TRN, RMAC
+
+Layer 3: Firmware Stats (wmiconfig --getTargetStats)
+  → CRC delta during scanning (channel-switch noise)
+
+Layer 4: Idle CRC (NEW — strongest non-WiFi detection)
+  → CRC during 2s idle = external 2.4GHz RF on home channel
+  → Catches: OcuSync, FPV video, drone telemetry
+  → Zero false positives in clean RF environment
+
+Layer 5: /proc/net/wireless (fast)
+  → Live noise floor, signal, link quality

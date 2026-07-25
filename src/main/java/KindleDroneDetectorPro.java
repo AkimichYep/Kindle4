@@ -8,9 +8,11 @@ public class KindleDroneDetectorPro {
 
     static final int ROWS = 40;
     static final int COLS = 50;
-    static final int FAST_MS = 5000;        // slower cycle (was 4000)
-    static final int STATS_EVERY = 5;       // every 5th loop (was 4)
-    static final int PROBE_EVERY = 6;       // every 6th loop (was 5)
+    static final int FAST_MS = 5000;
+    static final int STATS_EVERY = 5;
+    static final int PROBE_EVERY = 6;
+    static final int IDLE_CRC_EVERY = 10;       // idle CRC measurement interval
+    static final int MAXPERF_EVERY = 30;        // re-apply maxperf interval
     static final int BASELINE_LOOPS = 30;
     static final String LOG_FILE = "/mnt/us/drone_log.txt";
 
@@ -100,45 +102,61 @@ public class KindleDroneDetectorPro {
     static boolean armed = false;
     static int loop = 0;
     static long prevCRC = 0, crcDelta = 0;
-    static int noiseFloor = -96, csSnr = 0;
-    static boolean probeActive = false;     // track if we set a directed probe
-    static String lastRendered = "";        // avoid redundant full redraws
+    static int noiseFloor = -96, csSnr = 0, linkQuality = 0;
+    static boolean probeActive = false;
+    static String lastRendered = "";
     static PrintWriter logWriter = null;
+
+    // Idle CRC detection state
+    static long idleCRC = 0;
+    static boolean externalRF = false;
+    static int externalRFcount = 0;     // consecutive idle CRC detections
 
     // === Main ===
     public static void main(String[] args) {
-        System.out.println("=== KindleDroneDetectorPro v2.0 ===");
+        System.out.println("=== KindleDroneDetectorPro v2.1 ===");
 
         openLogFile();
         initFirmware();
-        prevCRC = readStats(true);  // read CRC + noise in one call
+        prevCRC = readStats(true);
 
         while (true) {
             long t0 = System.currentTimeMillis();
             loop++;
 
-            // Pre-scan: only change probe setting when needed
+            // Re-apply maxperf periodically (Kindle resets to "rec")
+            if (loop % MAXPERF_EVERY == 0) {
+                exec("wmiconfig","-i","wlan0","--power","maxperf");
+            }
+
+            // Pre-scan: probe setting
             if (loop % PROBE_EVERY == 0) {
                 String probe = PROBE_SSIDS[(loop/PROBE_EVERY) % PROBE_SSIDS.length];
                 exec("wmiconfig","-i","wlan0","--scanprobedssid",probe);
                 probeActive = true;
                 logFile("PROBE: " + probe);
             } else if (probeActive) {
-                // Reset to broadcast only once after a probe loop
                 exec("wmiconfig","-i","wlan0","--scanprobedssid","any");
                 probeActive = false;
             }
-            // else: already set to "any", no need to exec again
 
             // Scan
             List<AP> aps = scan();
             temporal(aps);
 
-            // Firmware stats (single call, reads CRC + noise + SNR)
+            // Fast noise/signal from /proc/net/wireless (every loop, cheap)
+            readProcWireless();
+
+            // Firmware stats via wmiconfig (expensive, less frequent)
             if (loop % STATS_EVERY == 0) {
                 long newCRC = readStats(true);
                 crcDelta = newCRC - prevCRC;
                 prevCRC = newCRC;
+            }
+
+            // Idle CRC measurement: detect external RF on home channel
+            if (loop % IDLE_CRC_EVERY == 0) {
+                measureIdleCRC();
             }
 
             // Score
@@ -155,22 +173,86 @@ public class KindleDroneDetectorPro {
                 }
             }
 
-            // Check for high-threat alert
+            // Alert level
             int maxThreat = aps.isEmpty() ? 0 : aps.get(0).threat;
 
-            // Render (smart: only full redraw if content changed meaningfully)
-            render(aps, maxThreat >= 60);
+            // Render
+            render(aps, maxThreat >= 60 || externalRF);
 
-            // Console log (abbreviated)
+            // Console log
             log(aps);
 
-            // File log (always, one line per loop)
+            // File log
             logLoopToFile(aps, maxThreat);
 
             // Wait
             long wait = FAST_MS - (System.currentTimeMillis()-t0);
-            if (wait > 0) try { Thread.sleep(wait); } catch (Exception e) {}
+            if (wait > 0) sleep(wait);
         }
+    }
+
+    // === Idle CRC Measurement ===
+    // Measures CRC errors during a brief period of NO scanning.
+    // Any CRC errors during idle = external RF on home channel.
+    static void measureIdleCRC() {
+        // Clear stats
+        exec("wmiconfig","-i","wlan0","--getTargetStats","--clearStats");
+        // Idle listen (no scanning, radio stays on home channel)
+        sleep(2000);
+        // Read CRC accumulated during idle
+        idleCRC = readStats(false);
+
+        if (idleCRC > 3) {
+            externalRFcount++;
+            if (externalRFcount >= 2) {
+                externalRF = true;
+            }
+            String msg = "!! IDLE-CRC=" + idleCRC + " external RF detected (count=" + externalRFcount + ")";
+            System.out.println(msg);
+            logFile(msg);
+        } else {
+            // Decay: require consecutive non-detections to clear
+            if (externalRFcount > 0) externalRFcount--;
+            if (externalRFcount == 0) externalRF = false;
+        }
+
+        // Re-clear for normal operation delta tracking
+        long fresh = readStats(true);
+        prevCRC = fresh;
+        crcDelta = 0;
+    }
+
+    // === Fast /proc/net/wireless reader ===
+    // Returns live signal/noise without spawning wmiconfig.
+    // Format: wlan0: SSSS  LL  LVL  NNN  ...
+    //   level and noise are unsigned; subtract 256 if > 127 for dBm.
+    static void readProcWireless() {
+        try {
+            Process p = Runtime.getRuntime().exec(new String[]{"cat","/proc/net/wireless"});
+            p.waitFor();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.trim().startsWith("wlan0")) {
+                    String[] parts = line.trim().split("\\s+");
+                    // parts: [wlan0:, status, link, level, noise, ...]
+                    if (parts.length >= 5) {
+                        try {
+                            linkQuality = Integer.parseInt(parts[2].replace(".", "").trim());
+                            int level = Integer.parseInt(parts[3].replace(".", "").trim());
+                            int noise = Integer.parseInt(parts[4].replace(".", "").trim());
+                            if (level > 127) level -= 256;
+                            if (noise > 127) noise -= 256;
+                            noiseFloor = noise;
+                            // csSnr can be derived: level - noise
+                            csSnr = level - noise;
+                        } catch (Exception ignored) {}
+                    }
+                    break;
+                }
+            }
+            r.close();
+        } catch (Exception ignored) {}
     }
 
     // === Logging ===
@@ -191,16 +273,17 @@ public class KindleDroneDetectorPro {
 
     static void logLoopToFile(List<AP> aps, int maxThreat) {
         if (logWriter == null) return;
-        // Only log if something interesting (threat > 0, or every 10th loop for heartbeat)
-        if (maxThreat > 0 || loop % 10 == 0) {
+        if (maxThreat > 0 || externalRF || loop % 10 == 0) {
             StringBuilder sb = new StringBuilder();
-            sb.append(String.format("%tT #%d AP:%d CRC+%d NF:%d THR:%d",
-                    System.currentTimeMillis(), loop, aps.size(), crcDelta, noiseFloor, maxThreat));
-            // Log top threats
+            sb.append(String.format("%tT #%d AP:%d CRC+%d iCRC:%d NF:%d SNR:%d THR:%d%s",
+                    System.currentTimeMillis(), loop, aps.size(), crcDelta, idleCRC,
+                    noiseFloor, csSnr, maxThreat, externalRF ? " !!RF!!" : ""));
             int count = 0;
             for (AP a : aps) {
                 if (a.threat > 0 && count < 5) {
-                    sb.append(String.format(" | %d:%s(%s)%ddB", a.threat, a.mac.substring(9), a.flags, a.signalDbm));
+                    String macShort = a.mac.length()>9 ? a.mac.substring(9) : a.mac;
+                    sb.append(String.format(" | %d:%s(%s)%ddB",
+                            a.threat, macShort, a.flags, a.signalDbm));
                     count++;
                 }
             }
@@ -211,7 +294,6 @@ public class KindleDroneDetectorPro {
     // === Firmware Init ===
     static void initFirmware() {
         exec("wmiconfig","-i","wlan0","--power","maxperf");
-        // Small pause between firmware commands
         sleep(200);
         exec("wmiconfig","-i","wlan0","--scan",
                 "--fgstart=1","--fgend=1","--bg=3",
@@ -283,7 +365,7 @@ public class KindleDroneDetectorPro {
         }
     }
 
-    // === Firmware Stats (single call for CRC + noise + SNR) ===
+    // === Firmware Stats (single call) ===
     static long readStats(boolean updateNoise) {
         long crc = 0;
         try {
@@ -296,7 +378,8 @@ public class KindleDroneDetectorPro {
                 if (line.startsWith("rx_crcerr")) {
                     crc = Long.parseLong(line.split("=")[1].trim());
                 } else if (updateNoise && line.startsWith("noise_floor")) {
-                    noiseFloor = Integer.parseInt(line.split("=")[1].trim());
+                    try { noiseFloor = Integer.parseInt(line.split("=")[1].trim()); }
+                    catch (Exception ignored) {}
                 } else if (updateNoise && line.startsWith("cs_snr")) {
                     try { csSnr = Integer.parseInt(line.split("=")[1].trim().split("\\s")[0]); }
                     catch (Exception ignored) {}
@@ -312,14 +395,14 @@ public class KindleDroneDetectorPro {
         for (AP a : aps) {
             int s=0; StringBuilder f=new StringBuilder();
 
-            // OUI match (strongest signal)
+            // OUI match
             String v=getOUI(a.mac);
             if (v!=null) { s+=50; f.append(v).append(" "); }
 
             // SSID keyword
             if (matchKW(a.ssid)) { s+=40; f.append("SSID "); }
 
-            // Hidden: only meaningful if within 80m (distant hidden = dual-SSID router)
+            // Hidden within 80m
             if (a.hidden && a.dist < 80) { s+=15; f.append("HID "); }
 
             // Temporal
@@ -333,17 +416,17 @@ public class KindleDroneDetectorPro {
                 if (h.isTransient) { s+=15; f.append("TRN "); }
             }
 
-            // Non-master mode (ad-hoc)
+            // Non-master mode
             if (a.mode!=null && !a.mode.isEmpty() && !a.mode.equals("Master")) {
                 s+=20; f.append("ADH ");
             }
 
-            // Strong new device after baseline
+            // Strong new device
             if (armed && !baseline.contains(a.mac) && a.signalDbm > -65) {
                 s+=20; f.append("STR ");
             }
 
-            // Locally-administered MAC (randomized)
+            // Random MAC
             if (a.mac.length() >= 2) {
                 try {
                     int firstByte = Integer.parseInt(a.mac.substring(0, 2), 16);
@@ -376,10 +459,16 @@ public class KindleDroneDetectorPro {
         int thr=0; for (AP a:aps) if (a.threat>=30) thr++;
         hud.append(String.format("DRONE %tT AP:%d THR:%d #%d",
                 System.currentTimeMillis(), aps.size(), thr, loop)).append("\n"); row++;
-        hud.append(String.format("CRC+%d NF:%d SNR:%d %s",
-                crcDelta, noiseFloor, csSnr, armed?"ARMED":"LEARN")).append("\n"); row++;
+        hud.append(String.format("CRC+%d NF:%d SNR:%d LQ:%d %s",
+                crcDelta, noiseFloor, csSnr, linkQuality,
+                armed?"ARMED":"LEARN")).append("\n"); row++;
 
-        // CRC alert (only if significant)
+        // External RF alert
+        if (externalRF) {
+            hud.append("** EXTERNAL RF: idle-CRC=").append(idleCRC).append(" **\n"); row++;
+        }
+
+        // CRC burst alert
         if (crcDelta > 200) {
             hud.append("** RF BURST: CRC+").append(crcDelta).append(" **\n"); row++;
         }
@@ -389,7 +478,7 @@ public class KindleDroneDetectorPro {
         // AP list
         for (AP a : aps) {
             if (row >= ROWS-1) break;
-            if (a.threat == 0 && row > 20) break;  // skip boring APs after 20 rows
+            if (a.threat == 0 && row > 20) break;
             History h = tracker.get(a.mac);
             char m1 = a.threat>=60?'!': (a.threat>=30?'+':' ');
             char m2 = (h!=null&&h.isMoving)?'~':' ';
@@ -411,9 +500,7 @@ public class KindleDroneDetectorPro {
 
         String content = hud.toString();
 
-        // Smart render: only full redraw if content changed
         if (!content.equals(lastRendered)) {
-            // Alert flash: full refresh if high threat detected
             if (alert) {
                 try { Runtime.getRuntime().exec(new String[]{"eips","-f"}).waitFor(); } catch(Exception e){}
                 sleep(300);
@@ -426,7 +513,7 @@ public class KindleDroneDetectorPro {
     static void writeEink(String text) {
         try {
             Runtime.getRuntime().exec(new String[]{"eips","-c"}).waitFor();
-            sleep(50);  // small pause for e-ink controller
+            sleep(50);
             String[] lines=text.split("\n");
             for (int y=0; y<lines.length&&y<ROWS; y++) {
                 String l=lines[y]; if (l.isEmpty()) continue;
@@ -438,8 +525,9 @@ public class KindleDroneDetectorPro {
 
     // === Console Log ===
     static void log(List<AP> aps) {
-        System.out.printf("%n== #%d %tT APs:%d CRC+%d NF:%d ==%n",
-                loop, System.currentTimeMillis(), aps.size(), crcDelta, noiseFloor);
+        System.out.printf("%n== #%d %tT APs:%d CRC+%d iCRC:%d NF:%d SNR:%d LQ:%d%s ==%n",
+                loop, System.currentTimeMillis(), aps.size(), crcDelta, idleCRC,
+                noiseFloor, csSnr, linkQuality, externalRF?" !!RF!!":"");
         int i=0;
         for (AP a : aps) {
             i++;
