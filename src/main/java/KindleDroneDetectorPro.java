@@ -9,7 +9,7 @@ public class KindleDroneDetectorPro {
     static final int FAST_MS = 4000;
     static final int STATS_EVERY = 4;
     static final int PROBE_EVERY = 5;
-    static final int BASELINE_LOOPS = 15;
+    static final int BASELINE_LOOPS = 30;
 
     static final Map<String, String> DRONE_OUI = new HashMap<>();
     static {
@@ -59,6 +59,7 @@ public class KindleDroneDetectorPro {
         boolean seenNow=false, seenPrev=false;
         double stddev=0;
         boolean isNew=false, isMoving=false, isHopping=false, isTransient=false;
+        int peakSignal = -999;  // strongest signal ever seen
 
         History(String m) { mac=m; firstSeen=lastSeen=System.currentTimeMillis(); }
 
@@ -71,6 +72,7 @@ public class KindleDroneDetectorPro {
             sigs[idx]=sig; chs[idx]=ch;
             idx=(idx+1)%N; count++;
             lastSeen=now;
+            if (sig > peakSignal) peakSignal = sig;
         }
 
         void compute() {
@@ -84,9 +86,9 @@ public class KindleDroneDetectorPro {
             for (int i=0; i<n; i++) { double d=sigs[(idx-1-i+N*2)%N]-mean; var+=d*d; }
             stddev = Math.sqrt(var/n);
             isNew = (now-firstSeen) < 50000;
-            isMoving = stddev > 4.0;
+            isMoving = stddev > 10.0;
             isHopping = chChanges >= 2;
-            isTransient = gaps >= 2;
+            isTransient = (gaps >= 2) && (peakSignal > -80);
         }
     }
 
@@ -270,7 +272,9 @@ public class KindleDroneDetectorPro {
             // Temporal
             History h = tracker.get(a.mac);
             if (h!=null) {
-                if (h.isNew && armed && !baseline.contains(a.mac)) { s+=25; f.append("NEW "); }
+                if (h.isNew && armed && !baseline.contains(a.mac) && a.signalDbm > -80) {
+                    s += 25; f.append("NEW ");
+                }
                 if (h.isMoving) { s+=20; f.append("MOV "); }
                 if (h.isHopping) { s+=20; f.append("HOP "); }
                 if (h.isTransient) { s+=15; f.append("TRN "); }
@@ -278,7 +282,17 @@ public class KindleDroneDetectorPro {
             // Non-master mode
             if (a.mode!=null && !a.mode.isEmpty() && !a.mode.equals("Master")) { s+=20; f.append("ADH "); }
             // Strong + new after baseline
-            if (armed && !baseline.contains(a.mac) && a.signalDbm>-70) { s+=20; f.append("STR "); }
+            if (armed && !baseline.contains(a.mac) && a.signalDbm > -65) {
+                s += 20; f.append("STR ");
+            }
+
+            // Add: Locally-administered MAC detection (randomized = suspicious)
+            if (a.mac.length() >= 2) {
+                int firstByte = Integer.parseInt(a.mac.substring(0, 2), 16);
+                if ((firstByte & 0x02) != 0) {  // LA bit set
+                    s += 10; f.append("RMAC ");
+                }
+            }
             // CRC spike bonus (applies to all - RF environment alert)
             if (crcDelta > 100) { /* environment is noisy - noted in header */ }
 
