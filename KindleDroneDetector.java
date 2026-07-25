@@ -3,40 +3,101 @@ import java.io.InputStreamReader;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
+/**
+ * Kindle 4 Drone Detector
+ *
+ * Extracts the maximum amount of information from the Wi-Fi module using the
+ * wireless-tools available on a jailbroken Kindle 4 (Atheros AR6000 chipset).
+ *
+ * Available Wi-Fi commands on a jailbroken Kindle 4:
+ *   iwlist wlan0 scan       - full AP scan (SSID, MAC, freq, quality, encryption...)
+ *   iwlist wlan0 frequency  - list supported channels/frequencies
+ *   iwlist wlan0 channel    - list supported channels
+ *   iwconfig wlan0          - current interface config, bit rate, TX power
+ *   iwlist wlan0 bitrate    - supported bit rates
+ *   iwlist wlan0 txpower    - supported TX power levels
+ *   iwpriv wlan0            - driver-private extensions
+ *   cat /proc/net/wireless  - live link quality / noise counters
+ *
+ * Drone detection heuristics (see scoreThreat):
+ *   - Known drone OUI (DJI, Parrot, Autel, Skydio, Yuneec, ESP32/DIY)
+ *   - Hidden SSID + strong/close signal
+ *   - SSID keyword match (drone, dji, fpv, mavic, tello, parrot, anafi...)
+ *   - Same MAC appearing on multiple channels (channel hopping)
+ *   - Ad-Hoc / non-Master mode (drone<->controller links)
+ *   - Rapid signal-strength change between scans (moving target)
+ */
 public class KindleDroneDetector {
 
-    static class RFSignal {
-        String macAddress;
-        String ssid;
-        String channel;
-        String frequency;
-        int signalDbm;
-        double distanceMeters;
-        String mode;
-        String txPower;
-        boolean isHidden;
-        boolean isProbeRequest;
-        long timestamp;
+    // Kindle 4 e-ink text mode (eips) fits roughly this many rows on screen.
+    private static final int MAX_SCREEN_ROWS = 35;
 
-        RFSignal(String mac, String ssid, String channel, String freq, int signal) {
-            this.macAddress = mac;
-            this.ssid = ssid;
-            this.channel = channel;
-            this.frequency = freq;
-            this.signalDbm = signal;
-            this.distanceMeters = calculateDistance(signal);
-            this.isHidden = (ssid == null || ssid.isEmpty());
-            this.timestamp = System.currentTimeMillis();
+    static class RFSignal {
+        String macAddress = "";
+        String ssid = "";
+        String channel = "";
+        String frequency = "";
+        int signalDbm = -999;
+        int noiseDbm = -999;
+        int qualityNum = 0;
+        int qualityMax = 94;
+        double distanceMeters;
+        String mode = "";
+        String encryption = "Open";
+        String protocol = "";
+        String bitRates = "";
+        boolean isHidden;
+        int threatScore = 0;
+        String threatReason = "";
+
+        void finalizeSignal() {
+            this.distanceMeters = calculateDistance(signalDbm);
+            this.isHidden = (ssid == null || ssid.isEmpty() || ssid.equals("[HIDDEN]"));
         }
     }
 
-    /**
-     * Converts Wi-Fi signal strength (dBm) to approximate distance in meters.
-     * Uses the free-space path loss model with typical Wi-Fi parameters.
-     */
+    // Known drone-manufacturer OUI prefixes (first 3 MAC octets)
+    private static final Map<String, String> DRONE_OUI = new HashMap<>();
+    static {
+        // DJI
+        DRONE_OUI.put("60:60:1F", "DJI");
+        DRONE_OUI.put("34:D2:62", "DJI");
+        DRONE_OUI.put("0C:43:96", "DJI");
+        DRONE_OUI.put("18:97:D0", "DJI");
+        DRONE_OUI.put("48:1C:B9", "DJI");
+        DRONE_OUI.put("E4:7A:2C", "DJI");
+        DRONE_OUI.put("A4:77:61", "DJI");
+        DRONE_OUI.put("FC:77:74", "DJI");
+        // Parrot
+        DRONE_OUI.put("00:26:19", "Parrot");
+        DRONE_OUI.put("00:12:1C", "Parrot");
+        DRONE_OUI.put("90:03:B7", "Parrot");
+        DRONE_OUI.put("A0:14:3D", "Parrot");
+        // Autel Robotics
+        DRONE_OUI.put("94:E3:6D", "Autel");
+        // Skydio
+        DRONE_OUI.put("38:1D:14", "Skydio");
+        // Yuneec
+        DRONE_OUI.put("E0:B6:F5", "Yuneec");
+        // Espressif (ESP32 - common in DIY drones / FPV links)
+        DRONE_OUI.put("24:0A:C4", "ESP32/DIY");
+        DRONE_OUI.put("30:AE:A4", "ESP32/DIY");
+        DRONE_OUI.put("7C:9E:BD", "ESP32/DIY");
+        DRONE_OUI.put("A4:CF:12", "ESP32/DIY");
+    }
+
+    // SSID keywords that suggest a drone / FPV / RC device
+    private static final String[] DRONE_KEYWORDS = {
+        "drone", "dji", "mavic", "tello", "phantom", "spark",
+        "parrot", "anafi", "bebop", "fpv", "skydio", "autel", "yuneec",
+        "goggles", "avata", "inspire", "matrice", "gimbal"
+    };
+
     private static double calculateDistance(int signalDbm) {
         final int TX_POWER = -30;
         final double PATH_LOSS_EXPONENT = 2.7;
@@ -44,197 +105,268 @@ public class KindleDroneDetector {
         return Math.max(distance, 0.5);
     }
 
-    /**
-     * Checks if MAC address has drone-like characteristics
-     * Drones often use specific OUI (Organization Unique Identifier) ranges
-     */
-    private static boolean isSuspiciousMac(String mac) {
-        if (mac == null || mac.isEmpty()) return false;
+    private static String getDroneVendor(String mac) {
+        if (mac == null || mac.length() < 8) return null;
+        return DRONE_OUI.get(mac.substring(0, 8).toUpperCase());
+    }
 
-        // DJI Drones: 00:1A:3A, 0C:43:96, 18:97:D0, 60:60:1F, A0:14:3D, A4:77:61, E0:76:D0, FC:77:74
-        // Parrot Drones: 00:26:19, 00:1E:2C, A0:14:3D
-        // Generic probe requests (randomized)
-        String prefix = mac.substring(0, 8).toUpperCase();
-        return prefix.equals("00:1A:3A") || prefix.equals("0C:43:96") || prefix.equals("18:97:D0") ||
-               prefix.equals("60:60:1F") || prefix.equals("A0:14:3D") || prefix.equals("A4:77:61") ||
-               prefix.equals("E0:76:D0") || prefix.equals("FC:77:74") || prefix.equals("00:26:19") ||
-               prefix.equals("00:1E:2C");
+    private static boolean ssidLooksLikeDrone(String ssid) {
+        if (ssid == null) return false;
+        String lower = ssid.toLowerCase();
+        for (String kw : DRONE_KEYWORDS) {
+            if (lower.contains(kw)) return true;
+        }
+        return false;
+    }
+
+    /** Scores how likely a signal belongs to a drone (0-100). */
+    private static void scoreThreat(RFSignal s, Map<String, Integer> channelHops) {
+        int score = 0;
+        StringBuilder reason = new StringBuilder();
+
+        String vendor = getDroneVendor(s.macAddress);
+        if (vendor != null) {
+            score += 50;
+            reason.append("OUI=").append(vendor).append(" ");
+        }
+        if (ssidLooksLikeDrone(s.ssid)) {
+            score += 40;
+            reason.append("SSID-kw ");
+        }
+        if (s.isHidden && s.distanceMeters < 150) {
+            score += 15;
+            reason.append("hidden-near ");
+        }
+        Integer hops = channelHops.get(s.macAddress);
+        if (hops != null && hops > 1) {
+            score += 20;
+            reason.append("hop=").append(hops).append(" ");
+        }
+        if (s.mode != null && !s.mode.equalsIgnoreCase("Master") && !s.mode.isEmpty()) {
+            score += 15;
+            reason.append("mode=").append(s.mode).append(" ");
+        }
+        if (s.distanceMeters < 50 && s.encryption.equals("Open")) {
+            score += 10;
+            reason.append("open-near ");
+        }
+
+        s.threatScore = Math.min(score, 100);
+        s.threatReason = reason.toString().trim();
     }
 
     public static void main(String[] args) {
-        System.out.println("=== + ===");
-        System.out.println("=== Kindle Drone Detector Started ===");
-        System.out.println("Scanning all Wi-Fi channels for RF signals...\n");
+        System.out.println("=== Kindle 4 Drone Detector Started ===");
+
+        // Print supported frequencies once at startup (diagnostic)
+        printSupportedFrequencies();
+
+        // Track signal history to detect moving targets (changing dBm)
+        Map<String, Integer> lastSignalByMac = new HashMap<>();
 
         while (true) {
             List<RFSignal> signals = new ArrayList<>();
-            Map<String, Integer> macFrequency = new HashMap<>();
+            Map<String, Set<String>> macChannels = new HashMap<>();
 
             try {
-                // Full iwlist scan - captures all available information
                 Process process = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "scan"});
-                int exitCode = process.waitFor();
-
-                if (exitCode != 0) {
-                    System.err.println("iwlist scan failed");
-                }
+                process.waitFor();
 
                 BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
                 String line;
-                String currentMac = "";
-                String currentSsid = "";
-                String currentChannel = "";
-                String currentFreq = "";
-                int currentSignal = -999;
-                String currentMode = "";
+                RFSignal cur = null;
 
                 while ((line = reader.readLine()) != null) {
-                    line = line.trim();
+                    String t = line.trim();
 
-                    // Extract MAC Address (Cell XX - Address: XX:XX:XX:XX:XX:XX)
-                    if (line.contains("Address:")) {
-                        int idx = line.indexOf("Address:");
-                        if (idx >= 0) {
-                            currentMac = line.substring(idx + 9).trim();
-                            System.err.println("DEBUG: Found MAC: " + currentMac);
+                    if (t.contains("Address:")) {
+                        if (cur != null && cur.signalDbm != -999) {
+                            cur.finalizeSignal();
+                            signals.add(cur);
                         }
-                    }
-                    // Extract SSID
-                    else if (line.startsWith("ESSID:")) {
-                        String marker = "ESSID:";
-                        currentSsid = line.substring(marker.length()).trim();
-                        if (currentSsid.startsWith("\"") && currentSsid.endsWith("\"")) {
-                            currentSsid = currentSsid.substring(1, currentSsid.length() - 1);
+                        cur = new RFSignal();
+                        int idx = t.indexOf("Address:");
+                        cur.macAddress = t.substring(idx + 9).trim();
+                    } else if (cur == null) {
+                        continue;
+                    } else if (t.startsWith("ESSID:")) {
+                        String v = t.substring(6).trim();
+                        if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) {
+                            v = v.substring(1, v.length() - 1);
                         }
-                        if (currentSsid.isEmpty()) {
-                            currentSsid = "[HIDDEN]";
+                        cur.ssid = v.isEmpty() ? "[HIDDEN]" : v;
+                    } else if (t.startsWith("Mode:")) {
+                        cur.mode = t.substring(5).trim();
+                    } else if (t.startsWith("Frequency:")) {
+                        String v = t.substring(10).trim();
+                        cur.frequency = v;
+                        int ch = v.indexOf("Channel");
+                        if (ch > 0) {
+                            cur.channel = v.substring(ch + 8).replace(")", "").trim();
                         }
-                        System.err.println("DEBUG: Found SSID: " + currentSsid);
-                    }
-                    // Extract Channel and Frequency
-                    else if (line.startsWith("Frequency:")) {
-                        String marker = "Frequency:";
-                        String freqPart = line.substring(marker.length()).trim();
-                        currentFreq = freqPart;
-                        // Extract channel from "2.422 GHz (Channel 3)"
-                        int chIdx = freqPart.indexOf("Channel");
-                        if (chIdx > 0) {
-                            currentChannel = freqPart.substring(chIdx + 8).replace(")", "").trim();
-                        }
-                        System.err.println("DEBUG: Frequency: " + currentFreq + " Channel: " + currentChannel);
-                    }
-                    // Extract Signal Level
-                    else if (line.contains("Signal level=")) {
+                    } else if (t.startsWith("Protocol:")) {
+                        cur.protocol = t.substring(9).trim();
+                    } else if (t.startsWith("Bit Rates:")) {
+                        cur.bitRates = t.substring(10).trim();
+                    } else if (t.contains("Quality=")) {
                         try {
-                            String marker = "Signal level=";
-                            int startIdx = line.indexOf(marker) + marker.length();
-                            int endIdx = line.indexOf(" dBm", startIdx);
-                            if (endIdx > startIdx) {
-                                String signalStr = line.substring(startIdx, endIdx).trim();
-                                currentSignal = Integer.parseInt(signalStr);
-                                System.err.println("DEBUG: Signal: " + currentSignal + " for " + currentMac + " (" + currentSsid + ")");
-
-                                // Add to signals list
-                                RFSignal signal = new RFSignal(currentMac, currentSsid, currentChannel, currentFreq, currentSignal);
-                                signals.add(signal);
-
-                                // Track MAC frequency (detecting rapid channel hopping = drone indicator)
-                                macFrequency.put(currentMac, macFrequency.getOrDefault(currentMac, 0) + 1);
+                            int qi = t.indexOf("Quality=") + 8;
+                            int qe = t.indexOf(" ", qi);
+                            String q = (qe > qi ? t.substring(qi, qe) : t.substring(qi)).trim();
+                            if (q.contains("/")) {
+                                String[] parts = q.split("/");
+                                cur.qualityNum = Integer.parseInt(parts[0].trim());
+                                cur.qualityMax = Integer.parseInt(parts[1].trim());
                             }
-                        } catch (Exception e) {
-                            System.err.println("DEBUG: Parse error: " + e.getMessage());
+                        } catch (Exception ignored) {}
+
+                        if (t.contains("Signal level=")) {
+                            try {
+                                int si = t.indexOf("Signal level=") + 13;
+                                int se = t.indexOf(" dBm", si);
+                                if (se > si) cur.signalDbm = Integer.parseInt(t.substring(si, se).trim());
+                            } catch (Exception ignored) {}
                         }
+                        if (t.contains("Noise level=")) {
+                            try {
+                                int ni = t.indexOf("Noise level=") + 12;
+                                int ne = t.indexOf(" dBm", ni);
+                                if (ne > ni) cur.noiseDbm = Integer.parseInt(t.substring(ni, ne).trim());
+                            } catch (Exception ignored) {}
+                        }
+                    } else if (t.startsWith("Encryption key:")) {
+                        String enc = t.substring(15).trim();
+                        cur.encryption = enc.equalsIgnoreCase("on") ? "WEP?" : "Open";
+                    } else if (t.contains("WPA2") || t.contains("802.11i")) {
+                        cur.encryption = "WPA2";
+                    } else if (t.contains("WPA Version")) {
+                        if (!cur.encryption.equals("WPA2")) cur.encryption = "WPA";
                     }
-                    // Extract Mode (AP, Ad-Hoc, etc.)
-                    else if (line.startsWith("Mode:")) {
-                        currentMode = line.substring(5).trim();
-                    }
+                }
+                if (cur != null && cur.signalDbm != -999) {
+                    cur.finalizeSignal();
+                    signals.add(cur);
                 }
                 reader.close();
-                System.err.println("DEBUG: Total signals found: " + signals.size());
 
-                // Sort by distance (closest first)
-                for (int i = 0; i < signals.size() - 1; i++) {
-                    for (int j = i + 1; j < signals.size(); j++) {
-                        if (signals.get(i).distanceMeters > signals.get(j).distanceMeters) {
-                            RFSignal temp = signals.get(i);
-                            signals.set(i, signals.get(j));
-                            signals.set(j, temp);
-                        }
-                    }
+                // Build channel-hop map
+                for (RFSignal s : signals) {
+                    macChannels.computeIfAbsent(s.macAddress, k -> new HashSet<>()).add(s.channel);
+                }
+                Map<String, Integer> channelHops = new HashMap<>();
+                for (Map.Entry<String, Set<String>> e : macChannels.entrySet()) {
+                    channelHops.put(e.getKey(), e.getValue().size());
                 }
 
-                // Build display text
-                StringBuilder hudText = new StringBuilder();
-                hudText.append("=== DRONE DETECTOR ===\n");
-                hudText.append("Time: ").append(LocalTime.now().toString().substring(0, 5)).append(" | Count: ").append(signals.size()).append("\n");
-                hudText.append("===\n");
+                // Score threats + detect movement
+                for (RFSignal s : signals) {
+                    scoreThreat(s, channelHops);
+                    Integer prev = lastSignalByMac.get(s.macAddress);
+                    if (prev != null && Math.abs(prev - s.signalDbm) >= 8) {
+                        s.threatScore = Math.min(s.threatScore + 10, 100);
+                        s.threatReason += " moving";
+                    }
+                    lastSignalByMac.put(s.macAddress, s.signalDbm);
+                }
+
+                // Sort: highest threat first, then closest distance
+                signals.sort((a, b) -> {
+                    if (b.threatScore != a.threatScore) return b.threatScore - a.threatScore;
+                    return Double.compare(a.distanceMeters, b.distanceMeters);
+                });
+
+                System.err.println("DEBUG: signals=" + signals.size());
+
+                // Full list to console/terminal (all networks, no screen limit)
+                System.out.println("\n===== FULL SCAN (" + signals.size() + " APs) @ "
+                        + LocalTime.now().toString().substring(0, 8) + " =====");
+                int idxLog = 1;
+                for (RFSignal s : signals) {
+                    String vend = getDroneVendor(s.macAddress);
+                    System.out.printf("%2d) %-17s %-14s C%-3s %4ddBm %5.0fm Q%d/%d %-4s thr=%d %s%n",
+                            idxLog++, s.macAddress, s.ssid,
+                            s.channel.isEmpty() ? "?" : s.channel,
+                            s.signalDbm, s.distanceMeters, s.qualityNum, s.qualityMax,
+                            s.encryption, s.threatScore,
+                            (vend != null ? "<" + vend + "> " : "") + s.threatReason);
+                }
+
+                // Build display
+                StringBuilder hud = new StringBuilder();
+
+                int threats = 0;
+                for (RFSignal s : signals) if (s.threatScore >= 40) threats++;
+                // Compact single-line header to save screen rows
+                hud.append("DRONE ").append(LocalTime.now().toString().substring(0, 8))
+                   .append(" AP:").append(signals.size())
+                   .append(" THR:").append(threats).append("\n");
 
                 if (signals.isEmpty()) {
-                    hudText.append("No signals detected.\n");
-                    System.err.println("DEBUG: No signals found!");
+                    hud.append("No signals detected.\n");
                 } else {
+                    // Show as many as fit on screen (Kindle 4 eips ~ 35 rows).
+                    // 1 header row is used, leave a couple for safety.
+                    int maxRows = MAX_SCREEN_ROWS - 2;
                     int count = 0;
-                    for (RFSignal sig : signals) {
-                        if (count < 10) {
-                            // Mark suspicious signals (hidden SSID + strong signal + known drone MAC)
-                            String marker = "";
-                            if (sig.isHidden && sig.distanceMeters < 100) marker = "★ ";
-                            if (isSuspiciousMac(sig.macAddress)) marker = "⚠ ";
-
-                            String distStr = String.format("%.0f", sig.distanceMeters);
-                            String displayLine = String.format("%s%sm|%3ddBm|%s|%s",
-                                marker, distStr, sig.signalDbm, sig.channel, sig.ssid);
-
-                            if (displayLine.length() > 40) {
-                                displayLine = displayLine.substring(0, 40);
-                            }
-
-                            hudText.append(displayLine).append("\n");
-                            System.err.println("DEBUG: Display: " + displayLine);
-                            count++;
-                        }
+                    for (RFSignal s : signals) {
+                        if (count >= maxRows) break;
+                        String flag = s.threatScore >= 70 ? "!!" : (s.threatScore >= 40 ? "! " : "  ");
+                        String vend = getDroneVendor(s.macAddress);
+                        String ssidShort = s.ssid.length() > 12 ? s.ssid.substring(0, 12) : s.ssid;
+                        // flag dist dBm ch enc ssid [vendor]
+                        String row = String.format("%s%3.0fm %ddB C%-3s %-4s %s",
+                                flag, s.distanceMeters, s.signalDbm,
+                                s.channel.isEmpty() ? "?" : s.channel,
+                                s.encryption, ssidShort);
+                        if (vend != null) row += " <" + vend + ">";
+                        if (row.length() > 40) row = row.substring(0, 40);
+                        hud.append(row).append("\n");
+                        count++;
+                    }
+                    // If more networks exist than we could show, note it
+                    if (signals.size() > maxRows) {
+                        hud.append("...+").append(signals.size() - maxRows).append(" more (see console)\n");
                     }
                 }
 
-                // Show detected MAC addresses and their hop counts (indicator of drones)
-                hudText.append("\n=== MAC ANALYSIS ===\n");
-                int macCount = 0;
-                for (Map.Entry<String, Integer> entry : macFrequency.entrySet()) {
-                    if (macCount < 5 && entry.getValue() > 1) {
-                        String suspicious = isSuspiciousMac(entry.getKey()) ? "SUSPECT" : "";
-                        hudText.append(entry.getKey()).append(" x").append(entry.getValue()).append(" ").append(suspicious).append("\n");
-                        macCount++;
-                    }
-                }
-
-                renderToEInk(hudText.toString());
+                renderToEInk(hud.toString());
 
             } catch (Exception e) {
                 System.err.println("Detector Error: " + e.getMessage());
-                e.printStackTrace();
             }
 
             try {
-                Thread.sleep(5000); // Scan every 5 seconds
+                Thread.sleep(4000);
             } catch (InterruptedException ignored) {}
+        }
+    }
+
+    /** Diagnostic: prints channels/frequencies the Kindle Wi-Fi supports. */
+    private static void printSupportedFrequencies() {
+        try {
+            System.out.println("--- Supported frequencies (iwlist wlan0 frequency) ---");
+            Process p = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "frequency"});
+            p.waitFor();
+            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+            String l;
+            while ((l = r.readLine()) != null) {
+                System.out.println(l);
+            }
+            r.close();
+        } catch (Exception e) {
+            System.err.println("Could not list frequencies: " + e.getMessage());
         }
     }
 
     private static void renderToEInk(String text) {
         try {
-            Process clearProc = Runtime.getRuntime().exec(new String[]{"eips", "-c"});
-            clearProc.waitFor();
-
+            Runtime.getRuntime().exec(new String[]{"eips", "-c"}).waitFor();
             String[] lines = text.split("\n");
             int y = 0;
             for (String l : lines) {
-                if (y < 24 && !l.isEmpty()) {
-                    if (l.length() > 40) {
-                        l = l.substring(0, 40);
-                    }
-                    Process p = Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l});
-                    p.waitFor();
+                if (y < MAX_SCREEN_ROWS && !l.isEmpty()) {
+                    if (l.length() > 40) l = l.substring(0, 40);
+                    Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l}).waitFor();
                     y++;
                 }
             }
