@@ -34,8 +34,9 @@ import java.util.Set;
  */
 public class KindleDroneDetector {
 
-    // Kindle 4 e-ink text mode (eips) fits roughly this many rows on screen.
-    private static final int MAX_SCREEN_ROWS = 35;
+    // Kindle 4 e-ink text mode (eips): 50 columns x 40 rows (600x800, 12x20 font).
+    private static final int MAX_SCREEN_ROWS = 40;
+    private static final int MAX_SCREEN_COLS = 50;
 
     static class RFSignal {
         String macAddress = "";
@@ -312,14 +313,14 @@ public class KindleDroneDetector {
                         if (count >= maxRows) break;
                         String flag = s.threatScore >= 70 ? "!!" : (s.threatScore >= 40 ? "! " : "  ");
                         String vend = getDroneVendor(s.macAddress);
-                        String ssidShort = s.ssid.length() > 12 ? s.ssid.substring(0, 12) : s.ssid;
+                        String ssidShort = s.ssid.length() > 20 ? s.ssid.substring(0, 20) : s.ssid;
                         // flag dist dBm ch enc ssid [vendor]
                         String row = String.format("%s%3.0fm %ddB C%-3s %-4s %s",
                                 flag, s.distanceMeters, s.signalDbm,
                                 s.channel.isEmpty() ? "?" : s.channel,
                                 s.encryption, ssidShort);
                         if (vend != null) row += " <" + vend + ">";
-                        if (row.length() > 40) row = row.substring(0, 40);
+                        if (row.length() > MAX_SCREEN_COLS) row = row.substring(0, MAX_SCREEN_COLS);
                         hud.append(row).append("\n");
                         count++;
                     }
@@ -365,7 +366,7 @@ public class KindleDroneDetector {
             int y = 0;
             for (String l : lines) {
                 if (y < MAX_SCREEN_ROWS && !l.isEmpty()) {
-                    if (l.length() > 40) l = l.substring(0, 40);
+                    if (l.length() > MAX_SCREEN_COLS) l = l.substring(0, MAX_SCREEN_COLS);
                     Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l}).waitFor();
                     y++;
                 }

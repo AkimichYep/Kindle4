@@ -105,7 +105,7 @@ public class KindleWifiHud {
                 } else {
                     int count = 0;
                     for (AccessPoint ap : apList) {
-                        if (count < 8) {
+                        if (count < 39) { // Kindle 4 screen fits 40 rows (1 header + 39)
                             String distanceStr = String.format("%.1f", ap.distanceMeters);
                             String displayLine = distanceStr + "m | " + ap.signalDbm + "dBm | " + ap.ssid;
                             hudText.append(displayLine).append("\n");
@@ -135,9 +135,9 @@ public class KindleWifiHud {
             String[] lines = text.split("\n");
             int y = 0;
             for (String l : lines) {
-                if (y < 20 && !l.isEmpty()) {
-                    if (l.length() > 35) {
-                        l = l.substring(0, 35);
+                if (y < 40 && !l.isEmpty()) { // 40 text rows on Kindle 4 (600x800)
+                    if (l.length() > 50) {    // 50 columns wide (12px cells)
+                        l = l.substring(0, 50);
                     }
                     Process p = Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l});
                     p.waitFor();
