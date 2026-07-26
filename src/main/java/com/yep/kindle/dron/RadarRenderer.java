@@ -74,7 +74,9 @@ public class RadarRenderer {
     static final int AP_NORM    = 100; // normal AP dot
     static final int AP_NEW     =  40; // new AP (darker)
     static final int AP_THREAT  =   0; // threat AP (solid black)
+    static final int AP_GHOST   = 175; // ghost AP (absent but recently seen — very light)
     static final int TEXT_FG    =   0; // body text: black
+    static final int TEXT_GHOST = 160; // ghost label text: light grey
     static final int HDR_FG     =   0; // header text (drawn over black bar → use 255 below)
     static final int DIV_LINE   = 120; // legend divider: medium grey
 
@@ -96,9 +98,11 @@ public class RadarRenderer {
 
     /**
      * Render the radar image and write it to IMAGE_FILE.
-     * Called from the main loop once per minute.
+     * Called from the main loop once per minute with a pre-filtered AP list
+     * that contains only: new APs, moving APs, threat APs, and ghost entries
+     * (known-threat MACs not currently visible but seen recently).
      *
-     * @param aps     current AP list (already scored + sorted by threat desc)
+     * @param aps     filtered AP list (scored + sorted, may include ghost entries)
      * @param armed   arming state
      * @param loop    loop counter
      * @param extRF   external RF flag
@@ -110,12 +114,17 @@ public class RadarRenderer {
 
         // ── Header bar ───────────────────────────────────────────────────────
         fillRect(px, 0, 0, W, 32, (byte) 0);
-        int thr = 0;
-        for (KindleDroneDetectorPro.AP a : aps) if (a.threat >= 30) thr++;
-        String hdr = String.format("DRONE RADAR  %tT  AP:%d  THR:%d  %s%s",
-                System.currentTimeMillis(), aps.size(), thr,
+        int thr   = 0;
+        int ghosts = 0;
+        for (KindleDroneDetectorPro.AP a : aps) {
+            if (a.threat >= 30) thr++;
+            if (a.ghost) ghosts++;
+        }
+        int live = aps.size() - ghosts;
+        String hdr = String.format("DRONE RADAR  %tT  LIVE:%d  THR:%d  GHOST:%d  %s%s",
+                System.currentTimeMillis(), live, thr, ghosts,
                 armed ? "ARMED" : "LEARN",
-                extRF  ? "  !!RF!!" : "");
+                extRF  ? " !!RF!!" : "");
         drawString(px, 4, 8, hdr, (byte) 255, 2);
 
         // ── Radar disc ───────────────────────────────────────────────────────
@@ -146,8 +155,31 @@ public class RadarRenderer {
         }
 
         // ── AP dots ──────────────────────────────────────────────────────────
-        // Assign a stable pseudo-angle per MAC so it doesn't jump each render
+        // Draw ghost (absent) APs first so live APs paint over them
         for (KindleDroneDetectorPro.AP a : aps) {
+            if (!a.ghost) continue;
+            if (a.dist <= 0) continue;
+            double angle = stableAngle(a.mac);
+            int    pr    = Math.min(distToPixels(a.dist, scale), RADAR_R - 6);
+            int    ax    = RADAR_CX + (int)(pr * Math.cos(angle));
+            int    ay    = RADAR_CY + (int)(pr * Math.sin(angle));
+
+            // Ghost: outline circle only (no fill) with lighter colour
+            drawCircle(px, ax, ay, 5, (byte) AP_GHOST);
+            drawCircle(px, ax, ay, 4, (byte) AP_GHOST);
+
+            // Label in light grey
+            String lbl = shortLabel(a) + "?";
+            int lx = ax + 7;
+            int ly = ay - 5;
+            if (lx + lbl.length() * 6 > RADAR_CX + RADAR_R) lx = ax - 7 - lbl.length() * 6;
+            if (ly < RADAR_CY - RADAR_R + 2) ly = ay + 8;
+            drawString(px, lx, ly, lbl, (byte) TEXT_GHOST, 1);
+        }
+
+        // Draw live APs on top
+        for (KindleDroneDetectorPro.AP a : aps) {
+            if (a.ghost) continue;
             if (a.dist <= 0) continue;
             double angle = stableAngle(a.mac);
             int    pr    = Math.min(distToPixels(a.dist, scale), RADAR_R - 6);
@@ -173,19 +205,33 @@ public class RadarRenderer {
 
         // ── Legend / stats rows ───────────────────────────────────────────────
         int ly = LEGEND_Y;
-        int maxRows = (H - ly - 4) / 10; // 1× font = 7px + 3 spacing
+        int maxRows = (H - ly - 22) / 10; // 1× font = 7px + 3 spacing; reserve 2 rows for footer
         int shown = 0;
+        // Live APs first
         for (KindleDroneDetectorPro.AP a : aps) {
             if (shown >= maxRows) break;
-            if (a.threat == 0 && shown >= maxRows / 2) break; // don't fill with zero-threat
+            if (a.ghost) continue;
             int col = a.threat >= 60 ? AP_THREAT : (a.threat >= 30 ? AP_NEW : AP_NORM);
             // coloured bullet
             fillRect(px, 4, ly + 1, 7, 5, (byte) col);
-            String row = String.format("%3d %-14s %4.0fm C%-2d %s",
-                    a.threat,
-                    a.ssid.length() > 14 ? a.ssid.substring(0, 14) : a.ssid,
-                    a.dist, a.channel, a.flags);
+            String ssid = a.ssid.length() > 13 ? a.ssid.substring(0, 13) : a.ssid;
+            String row = String.format("%3d %-13s %4.0fm C%-2d %s",
+                    a.threat, ssid, a.dist, a.channel, a.flags);
             drawString(px, 14, ly, row, (byte) TEXT_FG, 1);
+            ly += 10;
+            shown++;
+        }
+        // Ghost APs after live
+        for (KindleDroneDetectorPro.AP a : aps) {
+            if (shown >= maxRows) break;
+            if (!a.ghost) continue;
+            // hollow bullet for ghost
+            set(px, 4, ly + 1, (byte) AP_GHOST); set(px, 10, ly + 1, (byte) AP_GHOST);
+            set(px, 4, ly + 5, (byte) AP_GHOST); set(px, 10, ly + 5, (byte) AP_GHOST);
+            String ssid = a.ssid.length() > 13 ? a.ssid.substring(0, 13) : a.ssid;
+            String row = String.format("  ? %-13s %4.0fm %s",
+                    ssid, a.dist, a.flags);
+            drawString(px, 14, ly, row, (byte) TEXT_GHOST, 1);
             ly += 10;
             shown++;
         }
