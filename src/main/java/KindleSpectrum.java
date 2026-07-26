@@ -8,49 +8,49 @@ import java.util.Map;
 
 /**
  * Kindle 4 - 2.4 GHz Wi-Fi Spectrum / Channel Analyzer
- *
+ * <p>
  * Demonstrates "playing with frequencies" on a jailbroken Kindle 4 (Atheros AR6000).
- *
+ * <p>
  * Two modes of operation:
- *
- *  1) PASSIVE (default, reliable):
- *       Runs one `iwlist wlan0 scan`, groups the results by channel and builds a
- *       per-channel occupancy graph (AP count + peak signal). Works even while
- *       associated to an AP.
- *
- *  2) ACTIVE channel dwelling (experimental, pass "active" as arg):
- *       Iterates every 2.4 GHz channel, tunes the radio with
- *         iwconfig wlan0 freq <f>G
- *       dwells briefly, reads the live noise floor from /proc/net/wireless,
- *       then scans. This lets a channel-hopping drone reveal itself as bursts
- *       of activity on specific channels.
- *       NOTE: active tuning may drop your Wi-Fi association and, without monitor
- *       mode, ambient (non-AP) energy still isn't visible. It is mainly useful
- *       for measuring the noise floor per channel and forcing scans per band.
- *
+ * <p>
+ * 1) PASSIVE (default, reliable):
+ * Runs one `iwlist wlan0 scan`, groups the results by channel and builds a
+ * per-channel occupancy graph (AP count + peak signal). Works even while
+ * associated to an AP.
+ * <p>
+ * 2) ACTIVE channel dwelling (experimental, pass "active" as arg):
+ * Iterates every 2.4 GHz channel, tunes the radio with
+ * iwconfig wlan0 freq <f>G
+ * dwells briefly, reads the live noise floor from /proc/net/wireless,
+ * then scans. This lets a channel-hopping drone reveal itself as bursts
+ * of activity on specific channels.
+ * NOTE: active tuning may drop your Wi-Fi association and, without monitor
+ * mode, ambient (non-AP) energy still isn't visible. It is mainly useful
+ * for measuring the noise floor per channel and forcing scans per band.
+ * <p>
  * Useful commands this program wraps:
- *   iwconfig wlan0 freq 2.412G   - lock to channel 1
- *   iwlist   wlan0 scan          - list APs
- *   cat /proc/net/wireless       - live link quality / noise
+ * iwconfig wlan0 freq 2.412G   - lock to channel 1
+ * iwlist   wlan0 scan          - list APs
+ * cat /proc/net/wireless       - live link quality / noise
  */
 public class KindleSpectrum {
 
     // 2.4 GHz channel -> center frequency (GHz). Kindle 4 supports 1-13.
     private static final double[] CH_FREQ = {
-        0,      // index 0 unused
-        2.412,  // ch1
-        2.417,  // ch2
-        2.422,  // ch3
-        2.427,  // ch4
-        2.432,  // ch5
-        2.437,  // ch6
-        2.442,  // ch7
-        2.447,  // ch8
-        2.452,  // ch9
-        2.457,  // ch10
-        2.462,  // ch11
-        2.467,  // ch12
-        2.472   // ch13
+            0,      // index 0 unused
+            2.412,  // ch1
+            2.417,  // ch2
+            2.422,  // ch3
+            2.427,  // ch4
+            2.432,  // ch5
+            2.437,  // ch6
+            2.442,  // ch7
+            2.447,  // ch8
+            2.452,  // ch9
+            2.457,  // ch10
+            2.462,  // ch11
+            2.467,  // ch12
+            2.472   // ch13
     };
     private static final int MAX_CH = 13;
 
@@ -65,18 +65,26 @@ public class KindleSpectrum {
         List<String> ssids = new ArrayList<>();
     }
 
-    /** One access-point observation from a single scan. */
+    /**
+     * One access-point observation from a single scan.
+     */
     static class Obs {
         String mac;
         String ssid;
         int channel;
         int signal;
+
         Obs(String mac, String ssid, int channel, int signal) {
-            this.mac = mac; this.ssid = ssid; this.channel = channel; this.signal = signal;
+            this.mac = mac;
+            this.ssid = ssid;
+            this.channel = channel;
+            this.signal = signal;
         }
     }
 
-    /** Persistent per-MAC history across scans - used to detect channel hopping. */
+    /**
+     * Persistent per-MAC history across scans - used to detect channel hopping.
+     */
     static class HopRecord {
         String mac;
         String ssid = "";
@@ -89,8 +97,8 @@ public class KindleSpectrum {
     }
 
     // Hop-tracking tuning
-    private static final int   HOP_HISTORY_MAX = 6;     // channels remembered per MAC in trail
-    private static final long  STALE_MS        = 120000; // forget a MAC after 2 min unseen
+    private static final int HOP_HISTORY_MAX = 6;     // channels remembered per MAC in trail
+    private static final long STALE_MS = 120000; // forget a MAC after 2 min unseen
 
 
     public static void main(String[] args) {
@@ -121,7 +129,10 @@ public class KindleSpectrum {
                 System.err.println("Spectrum error: " + e.getMessage());
             }
 
-            try { Thread.sleep(3000); } catch (InterruptedException ignored) {}
+            try {
+                Thread.sleep(3000);
+            } catch (InterruptedException ignored) {
+            }
         }
     }
 
@@ -164,7 +175,9 @@ public class KindleSpectrum {
         }
     }
 
-    /** PASSIVE: one scan, group APs by channel and collect per-AP observations. */
+    /**
+     * PASSIVE: one scan, group APs by channel and collect per-AP observations.
+     */
     private static void passiveScan(Map<Integer, ChannelStats> spectrum, List<Obs> observations) throws Exception {
         Process p = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "scan"});
         p.waitFor();
@@ -190,14 +203,17 @@ public class KindleSpectrum {
                 if (ci > 0) {
                     try {
                         channel = Integer.parseInt(t.substring(ci + 8).replace(")", "").trim());
-                    } catch (Exception ignored) { channel = -1; }
+                    } catch (Exception ignored) {
+                        channel = -1;
+                    }
                 }
             } else if (t.contains("Signal level=")) {
                 try {
                     int si = t.indexOf("Signal level=") + 13;
                     int se = t.indexOf(" dBm", si);
                     if (se > si) signal = Integer.parseInt(t.substring(si, se).trim());
-                } catch (Exception ignored) {}
+                } catch (Exception ignored) {
+                }
 
                 if (channel >= 1 && channel <= MAX_CH) {
                     ChannelStats cs = spectrum.get(channel);
@@ -209,13 +225,18 @@ public class KindleSpectrum {
                     }
                 }
                 // reset per-cell
-                mac = ""; ssid = ""; channel = -1; signal = -999;
+                mac = "";
+                ssid = "";
+                channel = -1;
+                signal = -999;
             }
         }
         r.close();
     }
 
-    /** ACTIVE: tune each channel, read noise floor, then scan that band. */
+    /**
+     * ACTIVE: tune each channel, read noise floor, then scan that band.
+     */
     private static void activeSweep(Map<Integer, ChannelStats> spectrum, List<Obs> observations) throws Exception {
         for (int c = 1; c <= MAX_CH; c++) {
             // 1) Lock the radio to this channel's frequency
@@ -227,7 +248,10 @@ public class KindleSpectrum {
             }
 
             // 2) Dwell so the radio settles
-            try { Thread.sleep(150); } catch (InterruptedException ignored) {}
+            try {
+                Thread.sleep(150);
+            } catch (InterruptedException ignored) {
+            }
 
             // 3) Read live noise floor from /proc/net/wireless
             int noise = readNoiseFloor();
@@ -242,12 +266,12 @@ public class KindleSpectrum {
 
     /**
      * Reads the noise level column from /proc/net/wireless.
-     *
+     * <p>
      * Typical format:
-     *   Inter-| sta-|  Quality       | Discarded packets ...
-     *    face | tus | link level noise ...
-     *   wlan0: 0000   54.  -56.  -95.  ...
-     *
+     * Inter-| sta-|  Quality       | Discarded packets ...
+     * face | tus | link level noise ...
+     * wlan0: 0000   54.  -56.  -95.  ...
+     * <p>
      * Columns after "wlan0:" are: status, link, level, noise.
      * Values may carry a trailing '.'; noise is a negative dBm figure.
      */
@@ -278,11 +302,14 @@ public class KindleSpectrum {
                 }
             }
             r.close();
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) {
+        }
         return -999;
     }
 
-    /** Renders the HOPPERS panel + per-channel network details to the e-ink screen. */
+    /**
+     * Renders the HOPPERS panel + per-channel network details to the e-ink screen.
+     */
     private static void renderSpectrum(Map<Integer, ChannelStats> spectrum,
                                        Map<String, HopRecord> hopTracker, boolean active) {
         int totalAps = 0;
@@ -291,7 +318,10 @@ public class KindleSpectrum {
         for (int c = 1; c <= MAX_CH; c++) {
             ChannelStats cs = spectrum.get(c);
             totalAps += cs.apCount;
-            if (cs.apCount > busiestCount) { busiestCount = cs.apCount; busiest = c; }
+            if (cs.apCount > busiestCount) {
+                busiestCount = cs.apCount;
+                busiest = c;
+            }
         }
 
         // Collect MACs that have hopped channels, most active first
@@ -303,10 +333,10 @@ public class KindleSpectrum {
 
         StringBuilder hud = new StringBuilder();
         hud.append("2.4GHz +HOP ").append(LocalTime.now().toString().substring(0, 8))
-           .append(active ? " [ACT]" : "").append("\n");
+                .append(active ? " [ACT]" : "").append("\n");
         hud.append("APs:").append(totalAps)
-           .append(" Busy:C").append(busiest).append("(").append(busiestCount).append(")")
-           .append(" Hop:").append(hoppers.size()).append("\n");
+                .append(" Busy:C").append(busiest).append("(").append(busiestCount).append(")")
+                .append(" Hop:").append(hoppers.size()).append("\n");
 
         int rows = 2; // header lines used above
 
@@ -385,7 +415,9 @@ public class KindleSpectrum {
         renderToEInk(hud.toString());
     }
 
-    /** Noise floor is always negative (~ -90 to -100 dBm). Reject bogus values. */
+    /**
+     * Noise floor is always negative (~ -90 to -100 dBm). Reject bogus values.
+     */
     private static boolean validNoise(int noise) {
         return noise != -999 && noise < 0 && noise > -130;
     }

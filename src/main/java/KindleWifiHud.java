@@ -123,7 +123,8 @@ public class KindleWifiHud {
 
             try {
                 Thread.sleep(10000); // Wait 10 seconds before next scan loop
-            } catch (InterruptedException ignored) {}
+            } catch (InterruptedException ignored) {
+            }
         }
     }
 

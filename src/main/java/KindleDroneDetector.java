@@ -1,36 +1,31 @@
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.time.LocalTime;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 /**
  * Kindle 4 Drone Detector
- *
+ * <p>
  * Extracts the maximum amount of information from the Wi-Fi module using the
  * wireless-tools available on a jailbroken Kindle 4 (Atheros AR6000 chipset).
- *
+ * <p>
  * Available Wi-Fi commands on a jailbroken Kindle 4:
- *   iwlist wlan0 scan       - full AP scan (SSID, MAC, freq, quality, encryption...)
- *   iwlist wlan0 frequency  - list supported channels/frequencies
- *   iwlist wlan0 channel    - list supported channels
- *   iwconfig wlan0          - current interface config, bit rate, TX power
- *   iwlist wlan0 bitrate    - supported bit rates
- *   iwlist wlan0 txpower    - supported TX power levels
- *   iwpriv wlan0            - driver-private extensions
- *   cat /proc/net/wireless  - live link quality / noise counters
- *
+ * iwlist wlan0 scan       - full AP scan (SSID, MAC, freq, quality, encryption...)
+ * iwlist wlan0 frequency  - list supported channels/frequencies
+ * iwlist wlan0 channel    - list supported channels
+ * iwconfig wlan0          - current interface config, bit rate, TX power
+ * iwlist wlan0 bitrate    - supported bit rates
+ * iwlist wlan0 txpower    - supported TX power levels
+ * iwpriv wlan0            - driver-private extensions
+ * cat /proc/net/wireless  - live link quality / noise counters
+ * <p>
  * Drone detection heuristics (see scoreThreat):
- *   - Known drone OUI (DJI, Parrot, Autel, Skydio, Yuneec, ESP32/DIY)
- *   - Hidden SSID + strong/close signal
- *   - SSID keyword match (drone, dji, fpv, mavic, tello, parrot, anafi...)
- *   - Same MAC appearing on multiple channels (channel hopping)
- *   - Ad-Hoc / non-Master mode (drone<->controller links)
- *   - Rapid signal-strength change between scans (moving target)
+ * - Known drone OUI (DJI, Parrot, Autel, Skydio, Yuneec, ESP32/DIY)
+ * - Hidden SSID + strong/close signal
+ * - SSID keyword match (drone, dji, fpv, mavic, tello, parrot, anafi...)
+ * - Same MAC appearing on multiple channels (channel hopping)
+ * - Ad-Hoc / non-Master mode (drone<->controller links)
+ * - Rapid signal-strength change between scans (moving target)
  */
 public class KindleDroneDetector {
 
@@ -64,6 +59,7 @@ public class KindleDroneDetector {
 
     // Known drone-manufacturer OUI prefixes (first 3 MAC octets)
     private static final Map<String, String> DRONE_OUI = new HashMap<>();
+
     static {
         // DJI
         DRONE_OUI.put("60:60:1F", "DJI");
@@ -94,9 +90,9 @@ public class KindleDroneDetector {
 
     // SSID keywords that suggest a drone / FPV / RC device
     private static final String[] DRONE_KEYWORDS = {
-        "drone", "dji", "mavic", "tello", "phantom", "spark",
-        "parrot", "anafi", "bebop", "fpv", "skydio", "autel", "yuneec",
-        "goggles", "avata", "inspire", "matrice", "gimbal"
+            "drone", "dji", "mavic", "tello", "phantom", "spark",
+            "parrot", "anafi", "bebop", "fpv", "skydio", "autel", "yuneec",
+            "goggles", "avata", "inspire", "matrice", "gimbal"
     };
 
     private static double calculateDistance(int signalDbm) {
@@ -120,7 +116,9 @@ public class KindleDroneDetector {
         return false;
     }
 
-    /** Scores how likely a signal belongs to a drone (0-100). */
+    /**
+     * Scores how likely a signal belongs to a drone (0-100).
+     */
     private static void scoreThreat(RFSignal s, Map<String, Integer> channelHops) {
         int score = 0;
         StringBuilder reason = new StringBuilder();
@@ -219,21 +217,24 @@ public class KindleDroneDetector {
                                 cur.qualityNum = Integer.parseInt(parts[0].trim());
                                 cur.qualityMax = Integer.parseInt(parts[1].trim());
                             }
-                        } catch (Exception ignored) {}
+                        } catch (Exception ignored) {
+                        }
 
                         if (t.contains("Signal level=")) {
                             try {
                                 int si = t.indexOf("Signal level=") + 13;
                                 int se = t.indexOf(" dBm", si);
                                 if (se > si) cur.signalDbm = Integer.parseInt(t.substring(si, se).trim());
-                            } catch (Exception ignored) {}
+                            } catch (Exception ignored) {
+                            }
                         }
                         if (t.contains("Noise level=")) {
                             try {
                                 int ni = t.indexOf("Noise level=") + 12;
                                 int ne = t.indexOf(" dBm", ni);
                                 if (ne > ni) cur.noiseDbm = Integer.parseInt(t.substring(ni, ne).trim());
-                            } catch (Exception ignored) {}
+                            } catch (Exception ignored) {
+                            }
                         }
                     } else if (t.startsWith("Encryption key:")) {
                         String enc = t.substring(15).trim();
@@ -299,8 +300,8 @@ public class KindleDroneDetector {
                 for (RFSignal s : signals) if (s.threatScore >= 40) threats++;
                 // Compact single-line header to save screen rows
                 hud.append("DRONE ").append(LocalTime.now().toString().substring(0, 8))
-                   .append(" AP:").append(signals.size())
-                   .append(" THR:").append(threats).append("\n");
+                        .append(" AP:").append(signals.size())
+                        .append(" THR:").append(threats).append("\n");
 
                 if (signals.isEmpty()) {
                     hud.append("No signals detected.\n");
@@ -338,11 +339,14 @@ public class KindleDroneDetector {
 
             try {
                 Thread.sleep(4000);
-            } catch (InterruptedException ignored) {}
+            } catch (InterruptedException ignored) {
+            }
         }
     }
 
-    /** Diagnostic: prints channels/frequencies the Kindle Wi-Fi supports. */
+    /**
+     * Diagnostic: prints channels/frequencies the Kindle Wi-Fi supports.
+     */
     private static void printSupportedFrequencies() {
         try {
             System.out.println("--- Supported frequencies (iwlist wlan0 frequency) ---");
