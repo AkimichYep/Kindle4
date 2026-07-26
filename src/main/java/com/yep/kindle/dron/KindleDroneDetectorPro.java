@@ -38,6 +38,12 @@ public class KindleDroneDetectorPro {
     static final long WEATHER_EVERY_MS   = 300_000L; // 5 min
     static final long ABSENT_GHOST_MS    = 600_000L; // 10 min — show known-threat as ghost on radar
     static final int  RADAR_SNAPSHOT_MAX = 3;        // keep only this many timestamped radar PNGs
+    static final int  HISTORY_EVERY_LOOPS = 36;      // show history page every ~3 min
+    static final int  HISTORY_SHOW_LOOPS  = 6;       // keep history page for ~30 s
+    static final int  RADAR_DIST_DELTA_NEAR_M = 4;   // <= 60m
+    static final int  RADAR_DIST_DELTA_MID_M  = 6;   // 61..140m
+    static final int  RADAR_DIST_DELTA_FAR_M  = 8;   // 141..240m
+    static final int  RADAR_DIST_DELTA_VFAR_M = 10;  // > 240m
     static final String WEATHER_LOCATION = "Kharkiv";
 
     // ── File paths ────────────────────────────────────────────────────────────
@@ -55,7 +61,8 @@ public class KindleDroneDetectorPro {
     static final int CSV_OUI        = 6;
     static final int CSV_KEYWORD    = 7;
     static final int CSV_OBS_TIME   = 8;  // HH:mm wall-clock time of last observation
-    static final int CSV_COLS       = 9;
+    static final int CSV_DIST_HIST  = 9;  // semicolon-separated recent distance samples (m)
+    static final int CSV_COLS       = 10;
 
     static final String[] PROBE_SSIDS = {
         "TELLO-", "DJI-", "Spark-", "PHANTOM", "Mavic-", "ANAFI-",
@@ -76,6 +83,7 @@ public class KindleDroneDetectorPro {
         int    signalDbm  = -999;
         boolean hidden    = false;
         double  dist      = 0;
+        int     distDeltaM = 0; // + = moving away, - = getting closer
         int     threat    = 0;
         String  flags     = "";
         boolean ghost     = false; // true = known-threat not currently visible
@@ -89,6 +97,7 @@ public class KindleDroneDetectorPro {
         long   firstSeen, lastSeen;
         int[]  sigs       = new int[N];
         int[]  chs        = new int[N];
+        int[]  dists      = new int[N];
         int    idx        = 0, count = 0;
         int    chChanges  = 0, gaps   = 0;
         boolean seenNow = false, seenPrev = false;
@@ -101,13 +110,14 @@ public class KindleDroneDetectorPro {
             firstSeen = lastSeen = System.currentTimeMillis();
         }
 
-        void add(int sig, int ch) {
+        void add(int sig, int ch, double distM) {
             if (count > 0) {
                 int pi = (idx - 1 + N) % N;
                 if (chs[pi] != 0 && chs[pi] != ch) chChanges++;
             }
             sigs[idx] = sig;
             chs[idx]  = ch;
+            dists[idx] = (int) Math.round(distM);
             idx = (idx + 1) % N;
             count++;
             lastSeen = System.currentTimeMillis();
@@ -139,6 +149,7 @@ public class KindleDroneDetectorPro {
 
     /** Persistent record loaded from / saved to CSV. */
     static class NetRecord {
+        static final int DIST_KEEP = 12;
         String mac;
         String ssid;
         long   firstSeen;
@@ -148,6 +159,9 @@ public class KindleDroneDetectorPro {
         String oui;
         boolean keyword;
         String obsTime = ""; // HH:mm wall-clock time of last observation
+        int    lastDistM = -1;
+        int    lastDistDeltaM = 0;
+        Deque<Integer> distHistory = new ArrayDeque<>();
 
         NetRecord(String mac) {
             this.mac       = mac;
@@ -165,6 +179,50 @@ public class KindleDroneDetectorPro {
             if (a.ssid != null && !a.ssid.isEmpty() && !a.ssid.equals("[HIDDEN]")) ssid = a.ssid;
             if (oui == null || oui.isEmpty()) oui = DroneSignatures.lookupOUI(mac);
             if (!keyword) keyword = DroneSignatures.matchesKeyword(ssid);
+
+            int dm = (int) Math.round(a.dist);
+            if (lastDistM >= 0) lastDistDeltaM = dm - lastDistM;
+            lastDistM = dm;
+            pushDist(dm);
+            a.distDeltaM = lastDistDeltaM;
+        }
+
+        void pushDist(int distM) {
+            distHistory.addLast(distM);
+            while (distHistory.size() > DIST_KEEP) distHistory.removeFirst();
+        }
+
+        String encodeDistHistory() {
+            if (distHistory.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder();
+            boolean first = true;
+            for (int d : distHistory) {
+                if (!first) sb.append(';');
+                sb.append(d);
+                first = false;
+            }
+            return sb.toString();
+        }
+
+        void decodeDistHistory(String raw) {
+            distHistory.clear();
+            if (raw == null || raw.trim().isEmpty()) return;
+            String[] parts = raw.split(";");
+            for (String p : parts) {
+                try {
+                    int d = Integer.parseInt(p.trim());
+                    pushDist(d);
+                } catch (Exception ignored) { }
+            }
+            if (!distHistory.isEmpty()) {
+                lastDistM = distHistory.peekLast();
+                if (distHistory.size() >= 2) {
+                    Iterator<Integer> it = distHistory.descendingIterator();
+                    int last = it.next();
+                    int prev = it.next();
+                    lastDistDeltaM = last - prev;
+                }
+            }
         }
     }
 
@@ -206,8 +264,9 @@ public class KindleDroneDetectorPro {
     static boolean activitySinceLastRadar = false;
 
     // ── Display-mode tracking ─────────────────────────────────────────────────
-    // Which page is currently on screen: "weather", "radar", "hud"
+    // Which page is currently on screen: "weather", "history", "radar", "hud"
     static String currentPage = "";
+    static int historyCountdown = 0;
 
     // ── Row-level display diff ────────────────────────────────────────────────
     // Kindle screen is ROWS×COLS; we cache what was last written to each row.
@@ -337,6 +396,12 @@ public class KindleDroneDetectorPro {
                 }
                 activitySinceLastRadar = false;
             }
+
+            // Rotate to history page periodically when radar is not active.
+            if (radarCountdown == 0 && loop % HISTORY_EVERY_LOOPS == 0) {
+                historyCountdown = HISTORY_SHOW_LOOPS;
+            }
+
             // While radar is on screen: cycle through the last 3 saved frames
             // (Kindle-like animation — one frame per loop tick)
             if (radarCountdown > 0) {
@@ -370,10 +435,14 @@ public class KindleDroneDetectorPro {
             }
 
             // ── Render / log ─────────────────────────────────────────────────
-            // Default view is always weather page; HUD (stats) only shown during
-            // interesting activity while the radar countdown is not running.
+            // Default view is weather; periodically rotate in distance history.
             if (radarCountdown == 0) {
-                renderWeatherPage();
+                if (historyCountdown > 0) {
+                    renderHistoryPage();
+                    historyCountdown--;
+                } else {
+                    renderWeatherPage();
+                }
             }
             log(aps);
             logLoopToFile(aps, maxThreat);
@@ -406,7 +475,7 @@ public class KindleDroneDetectorPro {
                 line = line.trim();
                 if (line.isEmpty() || line.startsWith("#")) continue;
                 String[] col = line.split(",", -1);
-                if (col.length < 8) continue; // need at least 8 columns
+                if (col.length < 8) continue; // need at least v2.1 columns
                 String mac = col[CSV_MAC].trim().toUpperCase();
                 if (mac.length() < 11) continue; // sanity-check MAC format
                 NetRecord nr  = new NetRecord(mac);
@@ -419,6 +488,8 @@ public class KindleDroneDetectorPro {
                 nr.keyword    = "1".equals(col[CSV_KEYWORD].trim());
                 // obsTime column is optional (added in v2.4)
                 if (col.length > CSV_OBS_TIME) nr.obsTime = unescape(col[CSV_OBS_TIME]);
+                // distance history column is optional (added in v2.5)
+                if (col.length > CSV_DIST_HIST) nr.decodeDistHistory(unescape(col[CSV_DIST_HIST]));
                 knownNets.put(mac, nr);
                 baseline.add(mac);
                 count++;
@@ -438,9 +509,9 @@ public class KindleDroneDetectorPro {
         File tmp  = new File(CSV_TMP);
         File dest = new File(CSV_FILE);
         try (PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(tmp)))) {
-            pw.println("# mac,ssid,firstSeen,lastSeen,count,peakSignal,oui,keyword,obsTime");
+            pw.println("# mac,ssid,firstSeen,lastSeen,count,peakSignal,oui,keyword,obsTime,distHist");
             for (NetRecord nr : knownNets.values()) {
-                pw.printf("%s,%s,%d,%d,%d,%d,%s,%s,%s%n",
+                pw.printf("%s,%s,%d,%d,%d,%d,%s,%s,%s,%s%n",
                     nr.mac,
                     escape(nr.ssid),
                     nr.firstSeen,
@@ -449,7 +520,8 @@ public class KindleDroneDetectorPro {
                     nr.peakSignal,
                     escape(nr.oui != null ? nr.oui : ""),
                     nr.keyword ? "1" : "0",
-                    escape(nr.obsTime != null ? nr.obsTime : ""));
+                    escape(nr.obsTime != null ? nr.obsTime : ""),
+                    escape(nr.encodeDistHistory()));
             }
         } catch (IOException e) {
             System.err.println("saveNetworksCsv write: " + e.getMessage());
@@ -481,6 +553,7 @@ public class KindleDroneDetectorPro {
                 if (armed && !baseline.contains(a.mac)) statNewArmed++;
             }
             nr.update(a);
+            a.distDeltaM = nr.lastDistDeltaM;
         }
         // Keep knownNets bounded: drop oldest entries if it grows very large
         if (knownNets.size() > 2000) {
@@ -709,7 +782,7 @@ public class KindleDroneDetectorPro {
             if (a.mac == null || a.mac.isEmpty()) continue;
             History h = tracker.get(a.mac);
             if (h == null) { h = new History(a.mac); tracker.put(a.mac, h); }
-            h.add(a.signalDbm, a.channel);
+            h.add(a.signalDbm, a.channel, a.dist);
             h.ssid   = a.ssid;
             h.seenNow = true;
         }
@@ -805,71 +878,47 @@ public class KindleDroneDetectorPro {
     }
 
     // =========================================================================
-    // Radar AP filtering + ghost injection
+    // Radar AP filtering
     // =========================================================================
 
     /**
      * Build the filtered AP list for radar rendering.
      *
-     * Included items:
-     *   1. Any live AP with threat > 0  (! or + marker — HID, RMAC, OUI, SSID keyword…)
-     *   2. Any live AP that is genuinely NEW: not in baseline + armed + seen < 50 s
-     *   3. Ghost entries: known-threat records (OUI or keyword) not currently visible
-     *      but seen within ABSENT_GHOST_MS — shown dimmer so operator sees they were nearby
+     * Included items only:
+     *   1) NEW — live AP not in baseline and in "new" window
+     *   2) DIST — live AP whose distance changed meaningfully (|delta| >= threshold)
+     *   3) RET — live AP that disappeared earlier and has now returned online
      *
-     * NOT included (too noisy):
-     *   • isMoving — highway multipath causes every nearby static router to appear
-     *     "moving" (signal stddev spikes from passing cars reflecting the signal)
-     *   • Distance changes — same root cause; the free-space formula amplifies
-     *     ±3 dBm RSSI noise into ±15 m swings at 80 m range
+     * Excluded by design:
+     *   - static/unchanged APs
+     *   - ghost/offline AP placeholders
+     *   - threat-only APs without new/delta/return events
      */
     static List<AP> buildRadarAps(List<AP> liveAps) {
-        Set<String> liveMacs = new HashSet<>();
-        for (AP a : liveAps) liveMacs.add(a.mac);
-
         List<AP> result = new ArrayList<>();
 
-        // Pass 1: interesting live APs (threat or new non-baseline)
+        // Keep radar focused on change events only.
         for (AP a : liveAps) {
-            boolean include = false;
-            String reason   = "";
+            History h = tracker.get(a.mac);
+            boolean isNew = armed && !baseline.contains(a.mac) && h != null && h.isNew;
+            int distThr = dynamicDistThresholdM(a.dist);
+            boolean distChanged = Math.abs(a.distDeltaM) >= distThr;
+            boolean returned = h != null && h.seenNow && !h.seenPrev && h.count > 3;
 
-            if (a.threat > 0) {
-                include = true;
-                reason  = "threat=" + a.threat + " flags=[" + a.flags + "]";
-            } else if (armed && !baseline.contains(a.mac)) {
-                History h = tracker.get(a.mac);
-                if (h != null && h.isNew) {
-                    include = true;
-                    reason  = "new non-baseline MAC (firstSeen " + (System.currentTimeMillis() - h.firstSeen) / 1000 + "s ago)";
+            if (isNew || distChanged || returned) {
+                String reason;
+                if (isNew) {
+                    long ageS = (h != null) ? (System.currentTimeMillis() - h.firstSeen) / 1000L : -1;
+                    reason = "NEW " + ageS + "s";
+                } else if (returned) {
+                    reason = "RET online-again";
+                } else {
+                    reason = "DIST d=" + a.distDeltaM + "m thr=" + distThr;
                 }
-            }
-
-            if (include) {
                 logFile(String.format("RADAR-INC %s %-14s thr=%-3d dist=%.0fm [%s]",
                         a.mac, a.ssid, a.threat, a.dist, reason));
                 result.add(a);
             }
-        }
-
-        // Pass 2: ghost entries for absent known threats
-        long now = System.currentTimeMillis();
-        for (NetRecord nr : knownNets.values()) {
-            if (liveMacs.contains(nr.mac)) continue;
-            if (!(nr.keyword || (nr.oui != null && !nr.oui.isEmpty()))) continue;
-            long agoMs = now - nr.lastSeen;
-            if (agoMs > ABSENT_GHOST_MS) continue;
-            AP ghost     = new AP();
-            ghost.mac    = nr.mac;
-            ghost.ssid   = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : "[HIDDEN]";
-            ghost.dist   = WifiUtils.calculateDistance(nr.peakSignal);
-            ghost.signalDbm = nr.peakSignal;
-            ghost.threat = 0;
-            ghost.ghost  = true;
-            ghost.flags  = "GHOST " + formatLastSeen(agoMs);
-            logFile(String.format("RADAR-GHOST %s %-14s dist=%.0fm lastSeen=%s",
-                    nr.mac, ghost.ssid, ghost.dist, formatLastSeen(agoMs)));
-            result.add(ghost);
         }
 
         return result;
@@ -883,22 +932,23 @@ public class KindleDroneDetectorPro {
      * Build the radar PNG from a pre-filtered AP list, store it in the 3-frame
      * ring buffer, and show the latest frame via {@code eips -g}.
      *
-     * The AP list should be the result of {@link #buildRadarAps} — only new,
-     * moving, threat, and ghost entries.  Ghost entries are rendered with a
-     * lighter dot and a "GHOST" flag label.
+     * The AP list should be the result of {@link #buildRadarAps} — only
+     * event-like APs: NEW, DIST(change), RET(returned online).
      *
      * When new threats are detected a timestamped copy is saved alongside the
      * main radar.png so evidence is preserved across overwrites.
      */
     static void renderRadarImage(List<AP> radarAps) {
         try {
-            // Determine whether this is a "new detection" render (any live threat AP or new AP)
+            // Determine whether this render contains a fresh event (new or returned).
             boolean newDetection = false;
             for (AP a : radarAps) {
                 if (a.ghost) continue;
-                if (a.threat >= 30) { newDetection = true; break; }
                 History h = tracker.get(a.mac);
-                if (h != null && (h.isNew || h.isMoving)) { newDetection = true; break; }
+                if (h != null && (h.isNew || (h.seenNow && !h.seenPrev && h.count > 3))) {
+                    newDetection = true;
+                    break;
+                }
             }
 
             RadarRenderer.render(radarAps, armed, loop, externalRF);
@@ -1014,6 +1064,135 @@ public class KindleDroneDetectorPro {
         }
     }
 
+    /**
+     * Render movement-focused history page (distance trend over recent scans).
+     */
+    static void renderHistoryPage() {
+        String[] sc = buildHistoryScreen();
+        if (!"history".equals(currentPage)) {
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(150);
+            Arrays.fill(screenCache, "");
+            currentPage = "history";
+            logFile("DISPLAY -> history page");
+        }
+
+        boolean needClear = false;
+        for (int y = 0; y < KindleUtils.ROWS; y++) {
+            String cur = sc[y] != null ? sc[y] : "";
+            if (cur.length() < screenCache[y].length()) { needClear = true; break; }
+        }
+        if (needClear) {
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(100);
+            Arrays.fill(screenCache, "");
+        }
+        for (int y = 0; y < KindleUtils.ROWS; y++) {
+            String l = sc[y] != null ? sc[y] : "";
+            if (!l.equals(screenCache[y])) {
+                if (!l.isEmpty()) KindleUtils.exec("eips", "0", String.valueOf(y), l);
+                screenCache[y] = l;
+            }
+        }
+    }
+
+    static String[] buildHistoryScreen() {
+        String[] sc = new String[KindleUtils.ROWS];
+        Arrays.fill(sc, "");
+        int row = 0;
+        long now = System.currentTimeMillis();
+
+        sc[row++] = pad(String.format("* DIST HISTORY  %tT  loop#%d *", now, loop));
+        sc[row++] = pad(LINE_H);
+        sc[row++] = pad("SSID/MAC     DIST dM/th lastSeen trend");
+        sc[row++] = pad(LINE_H);
+
+        List<NetRecord> recs = new ArrayList<>(knownNets.values());
+        recs.sort((a, b) -> {
+            int da = movementScore(a);
+            int db = movementScore(b);
+            if (db != da) return db - da;
+            return Long.compare(b.lastSeen, a.lastSeen);
+        });
+
+        int shown = 0;
+        for (NetRecord nr : recs) {
+            if (row >= KindleUtils.ROWS - 2) break;
+            if (nr.distHistory.isEmpty()) continue;
+
+            int dist = nr.lastDistM >= 0 ? nr.lastDistM : nr.distHistory.peekLast();
+            int dm   = nr.lastDistDeltaM;
+            int thr  = dynamicDistThresholdM(dist);
+            if (shown >= 12 && Math.abs(dm) < 3) continue; // keep page focused on movers
+
+            String name = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : nr.mac;
+            if (name.length() > 13) name = name.substring(0, 13);
+            String when = formatLastSeen(now - nr.lastSeen);
+            String spark = sparkline(nr.distHistory);
+
+            String ln = String.format("%-11s %3dm%s/%02d %-7s %s%s",
+                    name, dist, formatDistDeltaTag(dm), thr, shortText(when, 7),
+                    spark, trendArrow(nr.distHistory));
+            sc[row++] = pad(ln);
+            shown++;
+        }
+
+        if (shown == 0 && row < KindleUtils.ROWS - 1) {
+            sc[row++] = pad("(not enough history yet)");
+        }
+
+        if (row < KindleUtils.ROWS) sc[KindleUtils.ROWS - 1] = pad("legend: dM/th  +away -closer  trend .oO#");
+        return sc;
+    }
+
+    static int movementScore(NetRecord nr) {
+        int score = Math.abs(nr.lastDistDeltaM) * 3;
+        if (nr.distHistory.size() >= 2) {
+            int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE;
+            for (int d : nr.distHistory) {
+                if (d < min) min = d;
+                if (d > max) max = d;
+            }
+            score += (max - min);
+        }
+        long ageMs = System.currentTimeMillis() - nr.lastSeen;
+        if (ageMs < 120_000L) score += 10;
+        return score;
+    }
+
+    static String sparkline(Deque<Integer> hist) {
+        if (hist == null || hist.isEmpty()) return "";
+        int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE;
+        for (int d : hist) {
+            if (d < min) min = d;
+            if (d > max) max = d;
+        }
+        int span = Math.max(1, max - min);
+        StringBuilder sb = new StringBuilder();
+        int kept = 0;
+        int skip = Math.max(1, hist.size() / 12);
+        int idx = 0;
+        for (int d : hist) {
+            if (idx % skip != 0) { idx++; continue; }
+            int lvl = (d - min) * 3 / span;
+            char c = (lvl <= 0) ? '.' : (lvl == 1 ? 'o' : (lvl == 2 ? 'O' : '#'));
+            sb.append(c);
+            kept++;
+            idx++;
+            if (kept >= 12) break;
+        }
+        return sb.toString();
+    }
+
+    static String trendArrow(Deque<Integer> hist) {
+        if (hist == null || hist.size() < 2) return "";
+        int first = hist.peekFirst();
+        int last  = hist.peekLast();
+        int d = last - first;
+        if (Math.abs(d) < 3) return "=";
+        return d > 0 ? ">" : "<";
+    }
+
     // Kindle 4 eips supports only ASCII; these are safe ASCII box approximations
     static final String LINE_H  = "----------------------------------------"; // horizontal rule
     static final String LINE_TL = "+"; static final String LINE_TR = "+";
@@ -1113,32 +1292,36 @@ public class KindleDroneDetectorPro {
         // ── Footer ───────────────────────────────────────────────────────────
         if (row < KindleUtils.ROWS - 1) {
             sc[KindleUtils.ROWS - 1] = pad(String.format(
-                "loop#%d  radar when: new/move/threat/absent", loop));
+                "loop#%d  radar:activity  history:~3min", loop));
         }
 
         return sc;
     }
 
     /**
-     * Returns true if any AP in the current scan is worth showing on radar:
-     *   • threat score > 0 (HID, RMAC, OUI match, SSID keyword, etc.)
-     *   • OR a genuinely new MAC that is NOT in baseline (unknown device just appeared)
-     *
-     * Deliberately does NOT trigger on isMoving or distance changes — those are
-     * caused by highway multipath noise on stationary routers and produce
-     * constant false positives in urban environments.
+     * Returns true when radar should be shown for change events:
+     *   - new AP,
+     *   - meaningful distance change,
+     *   - AP returned from offline to online.
      */
     static boolean hasInterestingActivity(List<AP> aps) {
         for (AP a : aps) {
             if (a.ghost) continue;
-            if (a.threat > 0) return true;
-            // Genuinely new non-baseline MAC that just appeared (< 50 s old)
-            if (!baseline.contains(a.mac) && armed) {
-                History h = tracker.get(a.mac);
-                if (h != null && h.isNew) return true;
-            }
+            History h = tracker.get(a.mac);
+            boolean isNew = !baseline.contains(a.mac) && armed && h != null && h.isNew;
+            boolean distChanged = Math.abs(a.distDeltaM) >= dynamicDistThresholdM(a.dist);
+            boolean returned = h != null && h.seenNow && !h.seenPrev && h.count > 3;
+            if (isNew || distChanged || returned) return true;
         }
         return false;
+    }
+
+    /** Distance-change threshold by distance band (meters). */
+    static int dynamicDistThresholdM(double distM) {
+        if (distM <= 60)  return RADAR_DIST_DELTA_NEAR_M;
+        if (distM <= 140) return RADAR_DIST_DELTA_MID_M;
+        if (distM <= 240) return RADAR_DIST_DELTA_FAR_M;
+        return RADAR_DIST_DELTA_VFAR_M;
     }
 
     /**
@@ -1282,8 +1465,9 @@ public class KindleDroneDetectorPro {
             char m2 = (h != null && h.isMoving) ? '~' : ' ';
             char m3 = (armed && !baseline.contains(a.mac) && h != null && h.isNew) ? '*' : ' ';
 
-            String ln = String.format("%c%c%c%3.0fm %3ddB C%-2d %-16s",
-                    m1, m2, m3, a.dist, a.signalDbm, a.channel,
+            String dTag = formatDistDeltaTag(a.distDeltaM);
+            String ln = String.format("%c%c%c%3.0fm%s %3ddB C%-2d %-16s",
+                    m1, m2, m3, a.dist, dTag, a.signalDbm, a.channel,
                     a.ssid.length() > 16 ? a.ssid.substring(0, 16) : a.ssid);
 
             // Append "last seen" note for known records that haven't been seen recently
@@ -1325,6 +1509,12 @@ public class KindleDroneDetectorPro {
     static String formatUptime(long secs) {
         long h = secs / 3600, m = (secs % 3600) / 60, s = secs % 60;
         return String.format("%d:%02d:%02d", h, m, s);
+    }
+
+    static String formatDistDeltaTag(int deltaM) {
+        if (Math.abs(deltaM) < 2) return "  =0";
+        if (deltaM > 0) return String.format(" +%d", Math.min(deltaM, 99));
+        return String.format(" -%d", Math.min(Math.abs(deltaM), 99));
     }
 
     // =========================================================================

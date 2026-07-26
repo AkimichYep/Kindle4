@@ -4,7 +4,10 @@ import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
 import java.awt.image.DataBufferByte;
 import java.io.*;
+import java.util.ArrayDeque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * RadarRenderer — pure-Java bitmap radar chart for the Kindle 4 e-ink display.
@@ -75,6 +78,9 @@ public class RadarRenderer {
     static final int AP_NEW     =  40; // new AP (darker)
     static final int AP_THREAT  =   0; // threat AP (solid black)
     static final int AP_GHOST   = 175; // ghost AP (absent but recently seen — very light)
+    static final int AP_TRAIL_OLD = 195; // oldest trail point
+    static final int AP_TRAIL_MID = 165; // middle trail point
+    static final int AP_TRAIL_NEW = 135; // newest trail point
     static final int TEXT_FG    =   0; // body text: black
     static final int TEXT_GHOST = 160; // ghost label text: light grey
     static final int HDR_FG     =   0; // header text (drawn over black bar → use 255 below)
@@ -91,6 +97,9 @@ public class RadarRenderer {
     // = one row (bit 4 = leftmost pixel).
     // Characters: space(32) through Z(90), digits 0-9, colon, dot, slash, hyphen
     static final int[][] FONT = buildFont();
+
+    static final int TRAIL_KEEP = 4;
+    static final Map<String, ArrayDeque<Integer>> TRAILS = new HashMap<>(); // distance in pixels
 
     // =========================================================================
     // Public entry point
@@ -154,6 +163,9 @@ public class RadarRenderer {
             drawString(px, RADAR_CX + 3, RADAR_CY - pr + 2, lbl, (byte) LABEL_GREY, 1);
         }
 
+        // Update per-MAC trail buffers from current live AP distances.
+        updateTrails(aps, scale);
+
         // ── AP dots ──────────────────────────────────────────────────────────
         // Draw ghost (absent) APs first so live APs paint over them
         for (KindleDroneDetectorPro.AP a : aps) {
@@ -186,6 +198,9 @@ public class RadarRenderer {
             int    ax    = RADAR_CX + (int)(pr * Math.cos(angle));
             int    ay    = RADAR_CY + (int)(pr * Math.sin(angle));
 
+            // Draw trail first (oldest -> newest), then current dot on top.
+            drawTrail(px, a.mac, angle);
+
             int dotR = a.threat >= 60 ? 8 : (a.threat >= 30 ? 6 : 4);
             int col  = a.threat >= 60 ? AP_THREAT : (a.threat >= 30 ? AP_NEW : AP_NORM);
             fillCircle(px, ax, ay, dotR, (byte) col);
@@ -215,8 +230,10 @@ public class RadarRenderer {
             // coloured bullet
             fillRect(px, 4, ly + 1, 7, 5, (byte) col);
             String ssid = a.ssid.length() > 13 ? a.ssid.substring(0, 13) : a.ssid;
-            String row = String.format("%3d %-13s %4.0fm C%-2d %s",
-                    a.threat, ssid, a.dist, a.channel, a.flags);
+            String row = String.format("%3d %-13s %4.0fm%s C%-2d %s",
+                    a.threat, ssid, a.dist,
+                    KindleDroneDetectorPro.formatDistDeltaTag(a.distDeltaM),
+                    a.channel, a.flags);
             drawString(px, 14, ly, row, (byte) TEXT_FG, 1);
             ly += 10;
             shown++;
@@ -289,6 +306,38 @@ public class RadarRenderer {
         String s = a.ssid.equals("[HIDDEN]") ? a.mac.substring(9) : a.ssid;
         if (s.length() > 10) s = s.substring(0, 10);
         return s + " " + (int) a.dist + "m";
+    }
+
+    static void updateTrails(List<KindleDroneDetectorPro.AP> aps, double scale) {
+        for (KindleDroneDetectorPro.AP a : aps) {
+            if (a.ghost || a.dist <= 0 || a.mac == null || a.mac.isEmpty()) continue;
+            int pr = Math.min(distToPixels(a.dist, scale), RADAR_R - 6);
+            ArrayDeque<Integer> q = TRAILS.get(a.mac);
+            if (q == null) {
+                q = new ArrayDeque<>();
+                TRAILS.put(a.mac, q);
+            }
+            q.addLast(pr);
+            while (q.size() > TRAIL_KEEP) q.removeFirst();
+        }
+    }
+
+    static void drawTrail(byte[] px, String mac, double angle) {
+        ArrayDeque<Integer> q = TRAILS.get(mac);
+        if (q == null || q.size() < 2) return;
+
+        int idx = 0;
+        int n = q.size();
+        for (int pr : q) {
+            // Skip newest point (current dot will be drawn over it).
+            if (idx == n - 1) break;
+            int ax = RADAR_CX + (int) (pr * Math.cos(angle));
+            int ay = RADAR_CY + (int) (pr * Math.sin(angle));
+            int shade = (idx <= 0) ? AP_TRAIL_OLD : (idx == n - 2 ? AP_TRAIL_NEW : AP_TRAIL_MID);
+            int r = (idx == n - 2) ? 3 : 2;
+            fillCircle(px, ax, ay, r, (byte) shade);
+            idx++;
+        }
     }
 
     // =========================================================================
