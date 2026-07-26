@@ -91,9 +91,16 @@ public final class NetCsvStore {
         File tmp = new File(csvTmp);
         File dest = new File(csvFile);
 
+        long now = System.currentTimeMillis();
+        int written = 0, pruned = 0;
         try (PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(tmp)))) {
             pw.println("# mac,ssid,firstSeen,lastSeen,count,peakSignal,oui,keyword,obsTime,distHist,lastCh,surgeCnt,maxApp,lastFlags");
             for (NetRecord nr : knownNets.values()) {
+                // Skip transient junk: rarely-seen, long-gone MACs with no signal of
+                // interest (no OUI/keyword hit, no surge, no approach streak). Keeps the
+                // persisted baseline meaningful and bounded on long runs. Non-destructive:
+                // the in-memory record is retained; only the on-disk file is trimmed.
+                if (isTransientJunk(nr, now)) { pruned++; continue; }
                 pw.printf("%s,%s,%d,%d,%d,%d,%s,%s,%s,%s,%d,%d,%d,%s%n",
                         nr.mac,
                         escape(nr.ssid),
@@ -109,6 +116,7 @@ public final class NetCsvStore {
                         nr.surgeCount,
                         nr.maxConsecutiveApproach,
                         escape(nr.lastFlags != null ? nr.lastFlags : ""));
+                written++;
             }
         } catch (IOException e) {
             System.err.println("saveNetworksCsv write: " + e.getMessage());
@@ -123,7 +131,17 @@ public final class NetCsvStore {
                 System.err.println("saveNetworksCsv rename: " + e.getMessage());
             }
         }
-        log(log, "CSV saved: " + knownNets.size() + " networks");
+        log(log, "CSV saved: " + written + " networks" + (pruned > 0 ? " (" + pruned + " transient pruned)" : ""));
+    }
+
+    /** Stale, low-value MAC with no drone-relevant signal — safe to drop from the CSV. */
+    private static boolean isTransientJunk(NetRecord nr, long now) {
+        boolean interesting = (nr.oui != null && !nr.oui.isEmpty())
+                || nr.keyword
+                || nr.surgeCount > 0
+                || nr.maxConsecutiveApproach >= 3;
+        boolean stale = (now - nr.lastSeen) > 3_600_000L; // not seen for > 1 h
+        return !interesting && stale && nr.seenCount < 5;
     }
 
     public static String encodeDistHistory(java.util.Deque<Integer> distHistory) {

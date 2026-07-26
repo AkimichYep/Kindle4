@@ -69,6 +69,12 @@ public class KindleDroneDetectorPro {
     static final String CSV_FILE = "/mnt/us/drone_nets.csv";
     static final String CSV_TMP  = "/mnt/us/drone_nets.csv.tmp";
 
+    // ── Logging controls ──────────────────────────────────────────────────────
+    static final long LOG_MAX_BYTES   = 512 * 1024; // rotate at 512 KB (keep one .1 backup)
+    static final int  DUMP_THREAT_MIN = 30;         // full AP dump only when something is "suspicious"
+    static final int  HEARTBEAT_EVERY = 60;         // force a context dump every ~5 min
+    static final int  LOG_ROTATE_EVERY = 6;         // check log size every ~30 s
+
     static final String[] PROBE_SSIDS = {
         "TELLO-", "DJI-", "Spark-", "PHANTOM", "Mavic-", "ANAFI-",
         "Bebop2-", "FPV-", "AVATA-", "SkyController"
@@ -298,7 +304,7 @@ public class KindleDroneDetectorPro {
                     roadCountdown    = 0;
                     historyCountdown = 0;
                     display.clearForPageSwitch("radar ended, returning to weather page");
-                    logFile("DISPLAY → radar ended, returning to weather page");
+                    logFile("DISPLAY -> radar ended, returning to weather page");
                 }
             }
 
@@ -317,6 +323,7 @@ public class KindleDroneDetectorPro {
 
             log(aps, ctx);
             logLoopToFile(aps, maxThreat, ctx);
+            if (ctx.loop % LOG_ROTATE_EVERY == 0) rotateLogIfNeeded();
 
             // ── Periodic CSV save ──────────────────────────────────────────────
             if (ctx.loop % SAVE_EVERY == 0 && ctx.armed) {
@@ -400,10 +407,30 @@ public class KindleDroneDetectorPro {
 
     static void openLogFile() {
         try {
-            logWriter = new PrintWriter(new BufferedWriter(new FileWriter(LOG_FILE, true)), true);
+            // Force UTF-8 so log text is charset-independent of the Kindle JVM default
+            // (which may be US-ASCII and would corrupt non-ASCII characters).
+            logWriter = new PrintWriter(new BufferedWriter(new OutputStreamWriter(
+                    new FileOutputStream(LOG_FILE, true),
+                    java.nio.charset.StandardCharsets.UTF_8)), true);
             logWriter.println("--- START " + new Date() + " ---");
         } catch (IOException e) {
             System.err.println("Cannot open log file: " + e.getMessage());
+        }
+    }
+
+    /** Size-based log rotation: keep one backup (drone_log.txt.1) and start fresh. */
+    static void rotateLogIfNeeded() {
+        try {
+            File f = new File(LOG_FILE);
+            if (f.length() < LOG_MAX_BYTES) return;
+            if (logWriter != null) logWriter.close();
+            File bak = new File(LOG_FILE + ".1");
+            if (bak.exists()) bak.delete();
+            f.renameTo(bak);
+            openLogFile();
+            logFile("log rotated (previous kept as drone_log.txt.1)");
+        } catch (Exception e) {
+            System.err.println("log rotate failed: " + e.getMessage());
         }
     }
 
@@ -452,10 +479,13 @@ public class KindleDroneDetectorPro {
                 break;
             }
         }
-        boolean fullDump = (maxThreat > 0 || ctx.externalRF || ctx.loop % 30 == 0 || hasFastApproach);
+        boolean fullDump = (maxThreat >= DUMP_THREAT_MIN || ctx.externalRF
+                || ctx.loop % HEARTBEAT_EVERY == 0 || hasFastApproach);
         if (!fullDump) return;
+        boolean heartbeat = (ctx.loop % HEARTBEAT_EVERY == 0);
 
         int idx = 0;
+        int skipped = 0;
         for (AP a : aps) {
             idx++;
             History   h  = ctx.temporal.get(a.mac);
@@ -466,6 +496,13 @@ public class KindleDroneDetectorPro {
             boolean isNew = h  != null && h.isNew;
             boolean isMov = h  != null && h.isMoving;
             boolean isHop = h  != null && h.isHopping;
+
+            // Only log APs that carry information; skip silent background routers.
+            // On the periodic heartbeat keep the top 5 (already sorted by threat/dist) for context.
+            boolean notable = a.threat >= 10 || isNew || isMov || isHop
+                    || (nr != null && (nr.surgeDetected || nr.consecutiveApproach >= 3));
+            if (!notable && !(heartbeat && idx <= 5)) { skipped++; continue; }
+
             int    emaM   = nr != null && nr.lastDistM >= 0 ? nr.lastDistM : (int) a.dist;
             int    smaSig = nr != null && nr.smoothedRssi != Integer.MIN_VALUE
                             ? nr.smoothedRssi : a.signalDbm;
@@ -480,5 +517,6 @@ public class KindleDroneDetectorPro {
                     a.ghost ? "G" : "-",
                     a.flags);
         }
+        if (skipped > 0) logWriter.printf("       ... (%d background APs omitted)%n", skipped);
     }
 }

@@ -114,7 +114,7 @@ public class DisplayManager {
         KindleUtils.exec("eips", "-c");
         KindleUtils.sleep(100);
         resetCache();
-        if (!logLabel.isEmpty()) System.out.println("DISPLAY → " + logLabel);
+        if (!logLabel.isEmpty()) System.out.println("DISPLAY -> " + logLabel);
     }
 
     // =========================================================================
