@@ -144,13 +144,21 @@ public class KindleDroneDetectorPro {
         long   firstSeen;
         long   lastSeen;
         int    seenCount;
-        int    peakSignal;
+        int    peakSignal = -999; // must start below any real RSSI value
         String oui;
         boolean keyword;
         String obsTime = ""; // HH:mm wall-clock time of last observation
         int    lastDistM = -1;
         int    lastDistDeltaM = 0;
         int    smoothedRssi = Integer.MIN_VALUE; // EMA-smoothed signal; resets each session
+        int    emaWarmup   = 0;  // scans since EMA init; consecutiveApproach blocked for first 3
+        int    consecutiveApproach    = 0;  // EMA-dist decreasing in a row; reset on reversal
+        int    maxConsecutiveApproach = 0;  // lifetime peak, persisted to CSV
+        boolean surgeDetected         = false; // raw RSSI jumped >12 dBm vs smoothed this scan
+        int    surgeRawDelta          = 0;  // magnitude of the surge for logging
+        int    surgeCount             = 0;  // lifetime surge events, persisted to CSV
+        int    lastChannel            = 0;  // last seen channel, persisted to CSV
+        String lastFlags              = ""; // last scoring flags, persisted to CSV
         Deque<Integer> distHistory = new ArrayDeque<>();
 
         NetRecord(String mac) {
@@ -169,18 +177,43 @@ public class KindleDroneDetectorPro {
             if (oui == null || oui.isEmpty()) oui = DroneSignatures.lookupOUI(mac);
             if (!keyword) keyword = DroneSignatures.matchesKeyword(ssid);
 
-            // EMA on RSSI (α=0.25) before distance conversion.
-            // Raw scan RSSI has ±5 dBm noise; the log-scale formula amplifies that to
-            // ±15 m at close range and ±40 m at 100 m, causing false movement detection.
-            // EMA reduces residual noise to ~1.9 dBm (σ * sqrt(α/(2−α))).
+            if (a.channel > 0) lastChannel = a.channel;
+
+            // EMA on RSSI (α=0.25) reduces per-scan noise (±5 dBm raw) to ~1.9 dBm.
+            // Fast-path surge: if raw signal jumped >12 dBm vs smoothed baseline in one
+            // 5-second scan, a rapid physical approach is likely. Flag it before EMA damps
+            // the signal — at 50 km/h a drone closes ~70 m per scan, which maps to 12+ dBm.
             if (smoothedRssi == Integer.MIN_VALUE) {
-                smoothedRssi = a.signalDbm;
+                smoothedRssi  = a.signalDbm;
+                surgeDetected = false;
+                surgeRawDelta = 0;
+                emaWarmup     = 0;
             } else {
-                smoothedRssi = (int) Math.round(0.25 * a.signalDbm + 0.75 * smoothedRssi);
+                if (emaWarmup < 3) emaWarmup++;
+                int rawDelta  = a.signalDbm - smoothedRssi; // positive = getting stronger
+                surgeDetected = (rawDelta > 12);
+                surgeRawDelta = surgeDetected ? rawDelta : 0;
+                if (surgeDetected) surgeCount++;
+                smoothedRssi  = (int) Math.round(0.25 * a.signalDbm + 0.75 * smoothedRssi);
             }
             int dm = (int) Math.round(WifiUtils.calculateDistance(smoothedRssi));
 
-            if (lastDistM >= 0) lastDistDeltaM = dm - lastDistM;
+            // Suppress consecutiveApproach during EMA warm-up (first 3 scans after init).
+            // Without this, the EMA settling drift falsely inflates maxConsecutiveApproach
+            // for static routers that were loaded from CSV with a reset smoothedRssi.
+            if (lastDistM >= 0 && emaWarmup >= 3) {
+                lastDistDeltaM = dm - lastDistM;
+                if (dm < lastDistM) {
+                    consecutiveApproach++;
+                    if (consecutiveApproach > maxConsecutiveApproach)
+                        maxConsecutiveApproach = consecutiveApproach;
+                } else {
+                    consecutiveApproach = 0;
+                }
+            } else {
+                if (lastDistM >= 0) lastDistDeltaM = dm - lastDistM;
+                consecutiveApproach = 0;
+            }
             lastDistM = dm;
             pushDist(dm);
             a.distDeltaM = lastDistDeltaM;
@@ -369,10 +402,14 @@ public class KindleDroneDetectorPro {
                 if (activitySinceLastRadar) {
                     // Build the filtered AP list: only items worth showing on radar
                     List<AP> radarAps = buildRadarAps(aps);
-                    logFile(String.format("RADAR trigger: live=%d filtered=%d ghosts=%d",
-                            aps.size(), radarAps.size(),
-                            (int) radarAps.stream().filter(a -> a.ghost).count()));
-                    renderRadarImage(radarAps);
+                    if (!radarAps.isEmpty()) {
+                        logFile(String.format("RADAR trigger: live=%d filtered=%d ghosts=%d",
+                                aps.size(), radarAps.size(),
+                                (int) radarAps.stream().filter(a -> a.ghost).count()));
+                        renderRadarImage(radarAps);
+                    } else {
+                        logFile("RADAR skip: nothing to show after filter");
+                    }
                 } else {
                     logFile("RADAR skip: no activity since last render");
                 }
@@ -498,6 +535,23 @@ public class KindleDroneDetectorPro {
             }
             nr.update(a);
             a.distDeltaM = nr.lastDistDeltaM;
+
+            // Dedicated event lines for fast-approach signals (non-baseline only)
+            if (!baseline.contains(a.mac)) {
+                String nm = (a.ssid != null && !a.ssid.isEmpty()
+                        && !"[HIDDEN]".equals(a.ssid)) ? a.ssid : a.mac;
+                if (nr.surgeDetected) {
+                    logFile(String.format("!! SURGE  %-14s +%ddBm sig=%d ch=%-2d ema=%dm #%d",
+                            nm, nr.surgeRawDelta, a.signalDbm,
+                            a.channel, nr.lastDistM, nr.surgeCount));
+                }
+                // Log when streak first reaches 3; not on every subsequent scan
+                if (nr.consecutiveApproach == 3) {
+                    logFile(String.format("!! APPROACH %-14s streak=3 dist=%dm trend=%s",
+                            nm, nr.lastDistM,
+                            MovementMetrics.sparkline(nr.distHistory)));
+                }
+            }
         }
         // Keep knownNets bounded: drop oldest entries if it grows very large
         if (knownNets.size() > 2000) {
@@ -575,24 +629,39 @@ public class KindleDroneDetectorPro {
                 noiseFloor, csSnr, maxThreat, currentPage,
                 externalRF ? " !!RF!!" : "");
 
-        // Write full AP detail every 10 loops, and always when there are threats
-        boolean fullDump = (maxThreat > 0 || externalRF || loop % 10 == 0);
+        // Full dump: on threats, external RF, surge/approach events, or every 30 loops
+        boolean hasFastApproach = false;
+        for (AP a : aps) {
+            NetRecord nr = knownNets.get(a.mac);
+            if (nr != null && !baseline.contains(a.mac)
+                    && (nr.surgeDetected || nr.consecutiveApproach >= 3)) {
+                hasFastApproach = true;
+                break;
+            }
+        }
+        boolean fullDump = (maxThreat > 0 || externalRF || loop % 30 == 0 || hasFastApproach);
         if (fullDump) {
             int idx = 0;
             for (AP a : aps) {
                 idx++;
-                History h = tracker.get(a.mac);
-                double stddev  = h != null ? h.stddev    : 0;
-                int    hops    = h != null ? h.chChanges : 0;
-                int    gaps    = h != null ? h.gaps      : 0;
-                boolean isNew  = h != null && h.isNew;
-                boolean isMov  = h != null && h.isMoving;
-                boolean isHop  = h != null && h.isHopping;
-                String inBase  = baseline.contains(a.mac) ? "BASE" : "NEW ";
-                logWriter.printf("  [%2d] %s %-17s %-14s C%-2d %4ddBm %5.0fm"
-                        + " thr=%-3d sd=%.1f hop=%d gap=%d %s%s%s%s flags=[%s]%n",
-                        idx, inBase, a.mac, a.ssid, a.channel, a.signalDbm, a.dist,
-                        a.threat, stddev, hops, gaps,
+                History   h   = tracker.get(a.mac);
+                NetRecord nr  = knownNets.get(a.mac);
+                double stddev = h  != null ? h.stddev    : 0;
+                int    hops   = h  != null ? h.chChanges : 0;
+                int    gaps   = h  != null ? h.gaps      : 0;
+                boolean isNew = h  != null && h.isNew;
+                boolean isMov = h  != null && h.isMoving;
+                boolean isHop = h  != null && h.isHopping;
+                int    emaM   = nr != null && nr.lastDistM   >= 0             ? nr.lastDistM   : (int) a.dist;
+                int    smaSig = nr != null && nr.smoothedRssi != Integer.MIN_VALUE ? nr.smoothedRssi : a.signalDbm;
+                int    ca     = nr != null ? nr.consecutiveApproach : 0;
+                String srg    = nr != null && nr.surgeDetected ? "!" : " ";
+                String inBase = baseline.contains(a.mac) ? "BASE" : "NEW ";
+                // Format: raw_dBm + surge_flag + (smoothed_dBm) + ema_dist + ca (consecutive approach)
+                logWriter.printf("  [%2d] %s %-17s %-14s C%-2d %4ddBm%s(%3ddBm) %4dm"
+                        + " thr=%-3d sd=%.1f hop=%d gap=%d ca=%-2d %s%s%s%s flags=[%s]%n",
+                        idx, inBase, a.mac, a.ssid, a.channel, a.signalDbm, srg, smaSig, emaM,
+                        a.threat, stddev, hops, gaps, ca,
                         isNew ? "N" : "-", isMov ? "M" : "-", isHop ? "H" : "-",
                         a.ghost ? "G" : "-",
                         a.flags);
@@ -797,8 +866,16 @@ public class KindleDroneDetectorPro {
                 } catch (NumberFormatException ignored) {}
             }
 
+            // Fast-approach signals from EMA-smoothed distance history (non-baseline only)
+            NetRecord nr = knownNets.get(a.mac);
+            if (nr != null && !baseline.contains(a.mac)) {
+                if (nr.surgeDetected)            { s += 20; f.append("SRG "); }
+                if (nr.consecutiveApproach >= 3) { s += 20; f.append("APR "); }
+            }
+
             a.threat = Math.min(s, 100);
             a.flags  = f.toString().trim();
+            if (nr != null) nr.lastFlags = a.flags; // persist for CSV investigation
         }
     }
 
@@ -824,6 +901,10 @@ public class KindleDroneDetectorPro {
 
         // Keep radar focused on change events only.
         for (AP a : liveAps) {
+            // Baseline devices with threat=0 are known neighbours; skip them so
+            // the radar stays blank (and hidden) when there's nothing interesting.
+            if (baseline.contains(a.mac) && a.threat == 0) continue;
+
             History h = tracker.get(a.mac);
             boolean isNew = armed && !baseline.contains(a.mac) && h != null && h.isNew;
             int distThr = dynamicDistThresholdM(a.dist);
@@ -1328,6 +1409,9 @@ public class KindleDroneDetectorPro {
     static boolean hasInterestingActivity(List<AP> aps) {
         for (AP a : aps) {
             if (a.ghost) continue;
+            // Baseline devices with no threat score are known static neighbours —
+            // their RSSI shifts are noise, not events worth showing on radar.
+            if (baseline.contains(a.mac) && a.threat == 0) continue;
             History h = tracker.get(a.mac);
             boolean isNew = !baseline.contains(a.mac) && armed && h != null && h.isNew;
             boolean distChanged = Math.abs(a.distDeltaM) >= dynamicDistThresholdM(a.dist);

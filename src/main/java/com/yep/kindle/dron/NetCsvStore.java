@@ -29,6 +29,10 @@ final class NetCsvStore {
     private static final int CSV_KEYWORD = 7;
     private static final int CSV_OBS_TIME = 8;
     private static final int CSV_DIST_HIST = 9;
+    private static final int CSV_LAST_CHANNEL = 10;  // last seen channel
+    private static final int CSV_SURGE_COUNT = 11;   // lifetime surge events
+    private static final int CSV_MAX_CONSEC_APP = 12; // max consecutive approach streak
+    private static final int CSV_LAST_FLAGS = 13;    // last scoring flags (SRG, APR, MOV, …)
 
     static int load(String csvFile,
                     Map<String, KindleDroneDetectorPro.NetRecord> knownNets,
@@ -55,12 +59,17 @@ final class NetCsvStore {
                 nr.firstSeen = parseLong(col[CSV_FIRST_SEEN], System.currentTimeMillis());
                 nr.lastSeen = parseLong(col[CSV_LAST_SEEN], nr.firstSeen);
                 nr.seenCount = parseInt(col[CSV_COUNT], 0);
-                nr.peakSignal = parseInt(col[CSV_PEAK_SIG], -99);
+                int ps = parseInt(col[CSV_PEAK_SIG], -999);
+                nr.peakSignal = (ps == 0) ? -999 : ps; // 0 = legacy buggy value, treat as unknown
                 nr.oui = unescape(col[CSV_OUI]);
                 nr.keyword = "1".equals(col[CSV_KEYWORD].trim());
 
-                if (col.length > CSV_OBS_TIME) nr.obsTime = unescape(col[CSV_OBS_TIME]);
-                if (col.length > CSV_DIST_HIST) decodeDistHistory(nr, unescape(col[CSV_DIST_HIST]));
+                if (col.length > CSV_OBS_TIME)       nr.obsTime                = unescape(col[CSV_OBS_TIME]);
+                if (col.length > CSV_DIST_HIST)      decodeDistHistory(nr, unescape(col[CSV_DIST_HIST]));
+                if (col.length > CSV_LAST_CHANNEL)   nr.lastChannel            = parseInt(col[CSV_LAST_CHANNEL], 0);
+                if (col.length > CSV_SURGE_COUNT)    nr.surgeCount             = parseInt(col[CSV_SURGE_COUNT], 0);
+                if (col.length > CSV_MAX_CONSEC_APP) nr.maxConsecutiveApproach = parseInt(col[CSV_MAX_CONSEC_APP], 0);
+                if (col.length > CSV_LAST_FLAGS)     nr.lastFlags              = unescape(col[CSV_LAST_FLAGS]);
 
                 knownNets.put(mac, nr);
                 baseline.add(mac);
@@ -81,9 +90,9 @@ final class NetCsvStore {
         File dest = new File(csvFile);
 
         try (PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(tmp)))) {
-            pw.println("# mac,ssid,firstSeen,lastSeen,count,peakSignal,oui,keyword,obsTime,distHist");
+            pw.println("# mac,ssid,firstSeen,lastSeen,count,peakSignal,oui,keyword,obsTime,distHist,lastCh,surgeCnt,maxApp,lastFlags");
             for (KindleDroneDetectorPro.NetRecord nr : knownNets.values()) {
-                pw.printf("%s,%s,%d,%d,%d,%d,%s,%s,%s,%s%n",
+                pw.printf("%s,%s,%d,%d,%d,%d,%s,%s,%s,%s,%d,%d,%d,%s%n",
                         nr.mac,
                         escape(nr.ssid),
                         nr.firstSeen,
@@ -93,7 +102,11 @@ final class NetCsvStore {
                         escape(nr.oui != null ? nr.oui : ""),
                         nr.keyword ? "1" : "0",
                         escape(nr.obsTime != null ? nr.obsTime : ""),
-                        escape(encodeDistHistory(nr.distHistory)));
+                        escape(encodeDistHistory(nr.distHistory)),
+                        nr.lastChannel,
+                        nr.surgeCount,
+                        nr.maxConsecutiveApproach,
+                        escape(nr.lastFlags != null ? nr.lastFlags : ""));
             }
         } catch (IOException e) {
             System.err.println("saveNetworksCsv write: " + e.getMessage());
