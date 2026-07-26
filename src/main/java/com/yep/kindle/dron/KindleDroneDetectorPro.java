@@ -1,24 +1,24 @@
 package com.yep.kindle.dron;
 
 import java.io.*;
+import java.net.HttpURLConnection;
+import java.net.URL;
 import java.nio.file.*;
 import java.util.*;
 
 /**
- * KindleDroneDetectorPro v2.2
+ * KindleDroneDetectorPro v2.3
  *
  * Changes vs v2.1:
  *  - CSV persistence: known networks saved/loaded from /mnt/us/drone_nets.csv
- *    (mac, ssid, firstSeen, lastSeen, seenCount, peakSignal, oui, keyword)
- *  - Fast arming: if CSV has >=3 entries the device arms immediately on start,
- *    skipping the 30-loop learning phase; new MACs still accumulate during the
- *    session and are saved back on every SAVE_EVERY loop.
- *  - Reliable I/O: atomic CSV write (temp file + rename), null-safe everywhere,
- *    process stream drain helpers, tracker pruning inside iterator.
- *  - Display diff: only lines that changed since last render are redrawn
- *    (row-level string cache) — minimises e-ink refreshes and wear.
- *  - Statistics panel: persistent counters for total scans, unique MACs ever
- *    seen, peak threat score reached, alert events, uptime.
+ *  - Fast arming from CSV (>=3 entries → arm immediately)
+ *  - Reliable I/O: atomic writes, null-safe, process stderr drain
+ *  - Display diff: row-level redraw cache, minimises e-ink wear
+ *  - Statistics panel: uptime, scans, unique MACs, peak threat, alerts
+ *  - Radar image: grayscale PNG with range rings + AP dots,
+ *    written to /mnt/us/radar.png and displayed via `eips -g` once/minute.
+ *  - Weather: wttr.in fetch every 5 minutes, shown in text HUD and radar footer.
+ *    The normal text HUD is restored automatically after the radar timeout.
  */
 public class KindleDroneDetectorPro {
 
@@ -29,10 +29,14 @@ public class KindleDroneDetectorPro {
     static final int  IDLE_CRC_EVERY  = 10;
     static final int  MAXPERF_EVERY   = 30;
     static final int  SAVE_EVERY      = 12;   // persist CSV every ~60 s
+    static final int  RADAR_EVERY     = 12;   // regenerate radar image every ~60 s
+    static final int  RADAR_SHOW_LOOPS = 10;  // display radar for this many loops (~50 s) then restore text
     static final int  IDLE_CRC_THRESHOLD = 6;
     static final int  IDLE_CRC_CONFIRM   = 3;
     static final int  BASELINE_LOOPS     = 30; // only used when no CSV
     static final long TRACKER_TTL_MS     = 180_000L; // 3 min
+    static final long WEATHER_EVERY_MS   = 300_000L; // 5 min
+    static final String WEATHER_LOCATION = "Kharkiv";
 
     // ── File paths ────────────────────────────────────────────────────────────
     static final String LOG_FILE = "/mnt/us/drone_log.txt";
@@ -181,6 +185,15 @@ public class KindleDroneDetectorPro {
     static int  statAlertEvents  = 0;
     static int  statNewArmed     = 0; // new MACs detected after arming
 
+    // ── Weather state ─────────────────────────────────────────────────────────
+    static WeatherData weather = WeatherData.unavailable("boot");
+    static long lastWeatherFetchAt = 0;
+
+    // ── Radar state ───────────────────────────────────────────────────────────
+    // When > 0, the radar image is currently shown; countdown decrements each
+    // loop and when it hits 0 the text HUD is restored (full screen clear).
+    static int radarCountdown = 0;
+
     // ── Row-level display diff ────────────────────────────────────────────────
     // Kindle screen is ROWS×COLS; we cache what was last written to each row.
     static String[] screenCache = new String[KindleUtils.ROWS];
@@ -192,6 +205,7 @@ public class KindleDroneDetectorPro {
     // =========================================================================
 
     public static void main(String[] args) {
+        System.setProperty("java.awt.headless", "true");
         System.out.println("=== KindleDroneDetectorPro v2.2 ===");
         Arrays.fill(screenCache, "");
 
@@ -243,6 +257,7 @@ public class KindleDroneDetectorPro {
             temporal(aps);
             updateKnownNets(aps);
             readProcWireless();
+            maybeRefreshWeather();
 
             // ── Firmware stats ───────────────────────────────────────────────
             if (loop % STATS_EVERY == 0) {
@@ -284,8 +299,43 @@ public class KindleDroneDetectorPro {
             boolean alert = maxThreat >= 60 || externalRF;
             if (alert) statAlertEvents++;
 
+            // ── Radar image (once per minute) ─────────────────────────────────
+            if (loop % RADAR_EVERY == 0) {
+                renderRadarImage(aps);
+            }
+            // While radar is on screen: cycle through the last 3 saved frames
+            // (Kindle-like animation — one frame per loop tick)
+            if (radarCountdown > 0) {
+                // Determine which slot to show this tick.
+                // The most-recently-written slot index is (nextFrame - 1 + FRAME_COUNT) % FRAME_COUNT.
+                // We step backwards through the ring on each tick so the animation
+                // replays from oldest→newest, giving a temporal "sweep" feel.
+                int framesAvailable = Math.min(radarCountdown, RadarRenderer.FRAME_COUNT);
+                // Step through available frames in order oldest→newest
+                int tickInCycle = (RADAR_SHOW_LOOPS - radarCountdown) % framesAvailable;
+                // oldest slot = nextFrame (the slot about to be overwritten next render)
+                int slotToShow = (RadarRenderer.nextFrame + tickInCycle) % RadarRenderer.FRAME_COUNT;
+                // Only refresh display when moving to a new frame (skip on first tick —
+                // renderRadarImage already showed the latest frame)
+                if (radarCountdown < RADAR_SHOW_LOOPS && tickInCycle == 0) {
+                    // New animation cycle — use eips to load the first frame of each pass.
+                    KindleUtils.exec("eips", "-g", RadarRenderer.FRAME_FILES[slotToShow]);
+                    KindleUtils.sleep(300);
+                } else if (radarCountdown < RADAR_SHOW_LOOPS) {
+                    showRadarAnimFrame(slotToShow);
+                }
+                radarCountdown--;
+                if (radarCountdown == 0) {
+                    // Force full text HUD repaint on next render()
+                    Arrays.fill(screenCache, "");
+                    KindleUtils.exec("eips", "-c");
+                    KindleUtils.sleep(100);
+                }
+            }
+
             // ── Render / log ─────────────────────────────────────────────────
-            render(aps, alert);
+            // Skip text HUD while radar is displayed
+            if (radarCountdown == 0) render(aps, alert);
             log(aps);
             logLoopToFile(aps, maxThreat);
 
@@ -698,6 +748,50 @@ public class KindleDroneDetectorPro {
     }
 
     // =========================================================================
+    // =========================================================================
+    // Radar image rendering
+    // =========================================================================
+
+    /**
+     * Build the radar PNG, store it in the 3-frame ring buffer, and show the
+     * latest frame via {@code eips -g}.
+     *
+     * Display sequence:
+     *   1. eips -c  — clears text-mode ghosting from the previous HUD.
+     *   2. eips -g <file> — loads the PNG image and triggers the panel refresh.
+     *
+     * The radar stays on screen for RADAR_SHOW_LOOPS loops cycling through the
+     * last 3 frames; the text HUD is restored automatically afterwards.
+     */
+    static void renderRadarImage(List<AP> aps) {
+        try {
+            RadarRenderer.render(aps, armed, loop, externalRF);
+            // Clear leftover text ghosting, then display the radar image.
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(300);
+            KindleUtils.exec("eips", "-g", RadarRenderer.IMAGE_FILE);
+            KindleUtils.sleep(500); // allow E-ink panel to complete the refresh
+            radarCountdown = RADAR_SHOW_LOOPS;
+            logFile("RADAR rendered: " + aps.size() + " APs, frame " + ((RadarRenderer.nextFrame + RadarRenderer.FRAME_COUNT - 1) % RadarRenderer.FRAME_COUNT));
+        } catch (Exception e) {
+            System.err.println("renderRadarImage: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Show one animation frame from the ring buffer.
+     */
+    static void showRadarAnimFrame(int frameSlot) {
+        String path = RadarRenderer.FRAME_FILES[frameSlot];
+        java.io.File f = new java.io.File(path);
+        if (!f.exists()) {
+            KindleUtils.exec("eips", "-g", RadarRenderer.IMAGE_FILE);
+        } else {
+            KindleUtils.exec("eips", "-g", path);
+        }
+    }
+
+    // =========================================================================
     // E-Ink render  –  row-level diff
     // =========================================================================
 
@@ -785,13 +879,16 @@ public class KindleDroneDetectorPro {
                 formatUptime(uptimeSec), statTotalScans,
                 knownNets.size(), statNewArmed, statPeakThreat, statAlertEvents));
 
-        // ── Row 3 (optional): external RF warning ────────────────────────────
+        // ── Row 3: weather (updated every 5 minutes) ─────────────────────────
+        sc[row++] = pad(weatherSummaryForHud());
+
+        // ── Optional: external RF warning ─────────────────────────────────────
         if (externalRF) {
             sc[row++] = pad(String.format("** EXT RF: iCRC=%d thr=%d cnt=%d/%d **",
                     idleCRC, IDLE_CRC_THRESHOLD, externalRFcount, IDLE_CRC_CONFIRM));
         }
 
-        // ── Row 3/4 (optional): CRC burst warning ────────────────────────────
+        // ── Optional: CRC burst warning ───────────────────────────────────────
         if (crcDelta > 200) {
             sc[row++] = pad("** RF BURST: CRC+" + crcDelta + " **");
         }
@@ -841,6 +938,119 @@ public class KindleDroneDetectorPro {
     static String formatUptime(long secs) {
         long h = secs / 3600, m = (secs % 3600) / 60, s = secs % 60;
         return String.format("%d:%02d:%02d", h, m, s);
+    }
+
+    // =========================================================================
+    // Weather
+    // =========================================================================
+
+    static void maybeRefreshWeather() {
+        long now = System.currentTimeMillis();
+        if (lastWeatherFetchAt != 0 && now - lastWeatherFetchAt < WEATHER_EVERY_MS) return;
+        lastWeatherFetchAt = now;
+
+        WeatherData latest = fetchWeather(WEATHER_LOCATION);
+        weather = latest;
+        if (latest.error == null) {
+            logFile("WEATHER ok: " + latest.temp + "C " + latest.description);
+        } else {
+            logFile("WEATHER err: " + latest.error);
+        }
+    }
+
+    static WeatherData fetchWeather(String location) {
+        WeatherData wd = new WeatherData();
+        wd.updatedAt = System.currentTimeMillis();
+        try {
+            String urlLocation = location.replace(" ", "%20");
+            URL url = new URL("http://wttr.in/" + urlLocation + "?format=j1");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setConnectTimeout(12_000);
+            conn.setReadTimeout(12_000);
+            conn.setRequestProperty("User-Agent", "curl/7.0");
+
+            StringBuilder sb = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) sb.append(line);
+            }
+
+            String json = sb.toString();
+            wd.temp        = field(json, "temp_C");
+            wd.feelsLike   = field(json, "FeelsLikeC");
+            wd.humidity    = field(json, "humidity");
+            wd.windSpeed   = field(json, "windspeedKmph");
+            wd.windDir     = field(json, "winddir16Point");
+            wd.pressure    = field(json, "pressure");
+            wd.description = arrayValue(json, "weatherDesc");
+            wd.city        = arrayValue(json, "areaName");
+            wd.country     = arrayValue(json, "country");
+            wd.error       = null;
+        } catch (Exception e) {
+            wd.error = e.getClass().getSimpleName() + ":" + e.getMessage();
+        }
+        return wd;
+    }
+
+    static String field(String json, String key) {
+        String[] variants = {"\"" + key + "\":\"", "\"" + key + "\": \""};
+        for (String search : variants) {
+            int i = json.indexOf(search);
+            if (i >= 0) {
+                i += search.length();
+                int e = json.indexOf('"', i);
+                if (e > i) return json.substring(i, e);
+            }
+        }
+        return "--";
+    }
+
+    static String arrayValue(String json, String key) {
+        int i = json.indexOf("\"" + key + "\"");
+        if (i < 0) return "--";
+        int open = json.indexOf('[', i);
+        int close = json.indexOf(']', open);
+        if (open < 0 || close < 0 || close <= open) return "--";
+        return field(json.substring(open, close), "value");
+    }
+
+    static String weatherSummaryForHud() {
+        if (weather == null) return "WX: n/a";
+        if (weather.error != null) {
+            return "WX ERR " + weather.error;
+        }
+        return String.format("WX %sC FL%s H%s%% W%s%s P%s",
+                nz(weather.temp), nz(weather.feelsLike), nz(weather.humidity),
+                nz(weather.windSpeed), nz(weather.windDir), nz(weather.pressure));
+    }
+
+    static String weatherSummaryForRadar() {
+        if (weather == null || weather.error != null) return "WX: N/A";
+        return String.format("WX %sC %s", nz(weather.temp), shortText(weather.description, 22));
+    }
+
+    static String shortText(String s, int max) {
+        if (s == null || s.isEmpty()) return "--";
+        return s.length() > max ? s.substring(0, max) : s;
+    }
+
+    static String nz(String s) {
+        return (s == null || s.isEmpty()) ? "--" : s;
+    }
+
+    static class WeatherData {
+        String temp = "--", feelsLike = "--", humidity = "--";
+        String windSpeed = "--", windDir = "--", description = "--";
+        String city = "--", country = "--", pressure = "--";
+        String error = null;
+        long updatedAt = 0;
+
+        static WeatherData unavailable(String reason) {
+            WeatherData w = new WeatherData();
+            w.error = reason;
+            w.updatedAt = System.currentTimeMillis();
+            return w;
+        }
     }
 
     // =========================================================================
