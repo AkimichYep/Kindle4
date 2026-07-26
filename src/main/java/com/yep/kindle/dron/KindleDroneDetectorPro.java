@@ -1,8 +1,6 @@
 package com.yep.kindle.dron;
 
 import java.io.*;
-import java.net.HttpURLConnection;
-import java.net.URL;
 import java.nio.file.*;
 import java.util.*;
 
@@ -50,19 +48,6 @@ public class KindleDroneDetectorPro {
     static final String LOG_FILE = "/mnt/us/drone_log.txt";
     static final String CSV_FILE = "/mnt/us/drone_nets.csv";
     static final String CSV_TMP  = "/mnt/us/drone_nets.csv.tmp";
-
-    // ── CSV column indices ────────────────────────────────────────────────────
-    static final int CSV_MAC        = 0;
-    static final int CSV_SSID       = 1;
-    static final int CSV_FIRST_SEEN = 2;
-    static final int CSV_LAST_SEEN  = 3;
-    static final int CSV_COUNT      = 4;
-    static final int CSV_PEAK_SIG   = 5;
-    static final int CSV_OUI        = 6;
-    static final int CSV_KEYWORD    = 7;
-    static final int CSV_OBS_TIME   = 8;  // HH:mm wall-clock time of last observation
-    static final int CSV_DIST_HIST  = 9;  // semicolon-separated recent distance samples (m)
-    static final int CSV_COLS       = 10;
 
     static final String[] PROBE_SSIDS = {
         "TELLO-", "DJI-", "Spark-", "PHANTOM", "Mavic-", "ANAFI-",
@@ -193,36 +178,11 @@ public class KindleDroneDetectorPro {
         }
 
         String encodeDistHistory() {
-            if (distHistory.isEmpty()) return "";
-            StringBuilder sb = new StringBuilder();
-            boolean first = true;
-            for (int d : distHistory) {
-                if (!first) sb.append(';');
-                sb.append(d);
-                first = false;
-            }
-            return sb.toString();
+            return NetCsvStore.encodeDistHistory(distHistory);
         }
 
         void decodeDistHistory(String raw) {
-            distHistory.clear();
-            if (raw == null || raw.trim().isEmpty()) return;
-            String[] parts = raw.split(";");
-            for (String p : parts) {
-                try {
-                    int d = Integer.parseInt(p.trim());
-                    pushDist(d);
-                } catch (Exception ignored) { }
-            }
-            if (!distHistory.isEmpty()) {
-                lastDistM = distHistory.peekLast();
-                if (distHistory.size() >= 2) {
-                    Iterator<Integer> it = distHistory.descendingIterator();
-                    int last = it.next();
-                    int prev = it.next();
-                    lastDistDeltaM = last - prev;
-                }
-            }
+            NetCsvStore.decodeDistHistory(this, raw);
         }
     }
 
@@ -251,7 +211,7 @@ public class KindleDroneDetectorPro {
     static int  statNewArmed     = 0; // new MACs detected after arming
 
     // ── Weather state ─────────────────────────────────────────────────────────
-    static WeatherData weather = WeatherData.unavailable("boot");
+    static WeatherService.WeatherData weather = WeatherService.unavailable("boot");
     static long lastWeatherFetchAt = 0;
 
     // ── Radar state ───────────────────────────────────────────────────────────
@@ -306,7 +266,7 @@ public class KindleDroneDetectorPro {
         prevCRC = readStats(true);
 
         // Fetch weather eagerly and display the weather page as the startup screen.
-        weather = fetchWeather(WEATHER_LOCATION);
+        weather = WeatherService.fetchWeather(WEATHER_LOCATION);
         lastWeatherFetchAt = System.currentTimeMillis();
         renderWeatherPage();
 
@@ -466,39 +426,8 @@ public class KindleDroneDetectorPro {
      * @return number of records loaded
      */
     static int loadNetworksCsv() {
-        File f = new File(CSV_FILE);
-        if (!f.exists()) return 0;
-        int count = 0;
-        try (BufferedReader br = new BufferedReader(new FileReader(f))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty() || line.startsWith("#")) continue;
-                String[] col = line.split(",", -1);
-                if (col.length < 8) continue; // need at least v2.1 columns
-                String mac = col[CSV_MAC].trim().toUpperCase();
-                if (mac.length() < 11) continue; // sanity-check MAC format
-                NetRecord nr  = new NetRecord(mac);
-                nr.ssid       = unescape(col[CSV_SSID]);
-                nr.firstSeen  = parseLong(col[CSV_FIRST_SEEN], System.currentTimeMillis());
-                nr.lastSeen   = parseLong(col[CSV_LAST_SEEN],  nr.firstSeen);
-                nr.seenCount  = parseInt(col[CSV_COUNT], 0);
-                nr.peakSignal = parseInt(col[CSV_PEAK_SIG], -99);
-                nr.oui        = unescape(col[CSV_OUI]);
-                nr.keyword    = "1".equals(col[CSV_KEYWORD].trim());
-                // obsTime column is optional (added in v2.4)
-                if (col.length > CSV_OBS_TIME) nr.obsTime = unescape(col[CSV_OBS_TIME]);
-                // distance history column is optional (added in v2.5)
-                if (col.length > CSV_DIST_HIST) nr.decodeDistHistory(unescape(col[CSV_DIST_HIST]));
-                knownNets.put(mac, nr);
-                baseline.add(mac);
-                count++;
-            }
-            System.out.println("CSV loaded: " + count + " networks from " + CSV_FILE);
-            logFile("CSV loaded: " + count + " networks");
-        } catch (IOException e) {
-            System.err.println("loadNetworksCsv: " + e.getMessage());
-        }
+        int count = NetCsvStore.load(CSV_FILE, knownNets, baseline, KindleDroneDetectorPro::logFile);
+        if (count > 0) System.out.println("CSV loaded: " + count + " networks from " + CSV_FILE);
         return count;
     }
 
@@ -506,38 +435,7 @@ public class KindleDroneDetectorPro {
      * Atomically save knownNets to CSV (write temp → rename).
      */
     static void saveNetworksCsv() {
-        File tmp  = new File(CSV_TMP);
-        File dest = new File(CSV_FILE);
-        try (PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(tmp)))) {
-            pw.println("# mac,ssid,firstSeen,lastSeen,count,peakSignal,oui,keyword,obsTime,distHist");
-            for (NetRecord nr : knownNets.values()) {
-                pw.printf("%s,%s,%d,%d,%d,%d,%s,%s,%s,%s%n",
-                    nr.mac,
-                    escape(nr.ssid),
-                    nr.firstSeen,
-                    nr.lastSeen,
-                    nr.seenCount,
-                    nr.peakSignal,
-                    escape(nr.oui != null ? nr.oui : ""),
-                    nr.keyword ? "1" : "0",
-                    escape(nr.obsTime != null ? nr.obsTime : ""),
-                    escape(nr.encodeDistHistory()));
-            }
-        } catch (IOException e) {
-            System.err.println("saveNetworksCsv write: " + e.getMessage());
-            return;
-        }
-        // Atomic rename: replaces dest only if write succeeded
-        if (!tmp.renameTo(dest)) {
-            // renameTo can fail across mount points on some kernels; fall back to copy+delete
-            try {
-                Files.copy(tmp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
-                tmp.delete();
-            } catch (IOException e) {
-                System.err.println("saveNetworksCsv rename: " + e.getMessage());
-            }
-        }
-        logFile("CSV saved: " + knownNets.size() + " networks");
+        NetCsvStore.save(CSV_TMP, CSV_FILE, knownNets, KindleDroneDetectorPro::logFile);
     }
 
     /** Update persistent knownNets map from current scan. */
@@ -567,25 +465,6 @@ public class KindleDroneDetectorPro {
         if (after > before) logFile("knownNets: +" + (after - before) + " new MACs");
     }
 
-    // ── CSV string helpers ────────────────────────────────────────────────────
-
-    static String escape(String s) {
-        if (s == null || s.isEmpty()) return "";
-        // replace commas and newlines to keep CSV well-formed
-        return s.replace(",", ";").replace("\n", " ").replace("\r", "");
-    }
-
-    static String unescape(String s) {
-        return s == null ? "" : s.trim();
-    }
-
-    static long parseLong(String s, long def) {
-        try { return Long.parseLong(s.trim()); } catch (Exception e) { return def; }
-    }
-
-    static int parseInt(String s, int def) {
-        try { return Integer.parseInt(s.trim()); } catch (Exception e) { return def; }
-    }
 
     // =========================================================================
     // Idle CRC measurement
@@ -1128,11 +1007,11 @@ public class KindleDroneDetectorPro {
             String name = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : nr.mac;
             if (name.length() > 13) name = name.substring(0, 13);
             String when = formatLastSeen(now - nr.lastSeen);
-            String spark = sparkline(nr.distHistory);
+            String spark = MovementMetrics.sparkline(nr.distHistory);
 
             String ln = String.format("%-11s %3dm%s/%02d %-7s %s%s",
                     name, dist, formatDistDeltaTag(dm), thr, shortText(when, 7),
-                    spark, trendArrow(nr.distHistory));
+                    spark, MovementMetrics.trendArrow(nr.distHistory));
             sc[row++] = pad(ln);
             shown++;
         }
@@ -1160,38 +1039,7 @@ public class KindleDroneDetectorPro {
         return score;
     }
 
-    static String sparkline(Deque<Integer> hist) {
-        if (hist == null || hist.isEmpty()) return "";
-        int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE;
-        for (int d : hist) {
-            if (d < min) min = d;
-            if (d > max) max = d;
-        }
-        int span = Math.max(1, max - min);
-        StringBuilder sb = new StringBuilder();
-        int kept = 0;
-        int skip = Math.max(1, hist.size() / 12);
-        int idx = 0;
-        for (int d : hist) {
-            if (idx % skip != 0) { idx++; continue; }
-            int lvl = (d - min) * 3 / span;
-            char c = (lvl <= 0) ? '.' : (lvl == 1 ? 'o' : (lvl == 2 ? 'O' : '#'));
-            sb.append(c);
-            kept++;
-            idx++;
-            if (kept >= 12) break;
-        }
-        return sb.toString();
-    }
-
-    static String trendArrow(Deque<Integer> hist) {
-        if (hist == null || hist.size() < 2) return "";
-        int first = hist.peekFirst();
-        int last  = hist.peekLast();
-        int d = last - first;
-        if (Math.abs(d) < 3) return "=";
-        return d > 0 ? ">" : "<";
-    }
+    // Movement sparkline + trend arrow moved to MovementMetrics.
 
     // Kindle 4 eips supports only ASCII; these are safe ASCII box approximations
     static final String LINE_H  = "----------------------------------------"; // horizontal rule
@@ -1318,10 +1166,12 @@ public class KindleDroneDetectorPro {
 
     /** Distance-change threshold by distance band (meters). */
     static int dynamicDistThresholdM(double distM) {
-        if (distM <= 60)  return RADAR_DIST_DELTA_NEAR_M;
-        if (distM <= 140) return RADAR_DIST_DELTA_MID_M;
-        if (distM <= 240) return RADAR_DIST_DELTA_FAR_M;
-        return RADAR_DIST_DELTA_VFAR_M;
+        return MovementMetrics.dynamicDistThresholdM(
+                distM,
+                RADAR_DIST_DELTA_NEAR_M,
+                RADAR_DIST_DELTA_MID_M,
+                RADAR_DIST_DELTA_FAR_M,
+                RADAR_DIST_DELTA_VFAR_M);
     }
 
     /**
@@ -1512,9 +1362,7 @@ public class KindleDroneDetectorPro {
     }
 
     static String formatDistDeltaTag(int deltaM) {
-        if (Math.abs(deltaM) < 2) return "  =0";
-        if (deltaM > 0) return String.format(" +%d", Math.min(deltaM, 99));
-        return String.format(" -%d", Math.min(Math.abs(deltaM), 99));
+        return MovementMetrics.formatDistDeltaTag(deltaM);
     }
 
     // =========================================================================
@@ -1526,7 +1374,7 @@ public class KindleDroneDetectorPro {
         if (lastWeatherFetchAt != 0 && now - lastWeatherFetchAt < WEATHER_EVERY_MS) return;
         lastWeatherFetchAt = now;
 
-        WeatherData latest = fetchWeather(WEATHER_LOCATION);
+        WeatherService.WeatherData latest = WeatherService.fetchWeather(WEATHER_LOCATION);
         weather = latest;
         if (latest.error == null) {
             logFile("WEATHER ok: " + latest.temp + "C " + latest.description);
@@ -1535,75 +1383,12 @@ public class KindleDroneDetectorPro {
         }
     }
 
-    static WeatherData fetchWeather(String location) {
-        WeatherData wd = new WeatherData();
-        wd.updatedAt = System.currentTimeMillis();
-        try {
-            String urlLocation = location.replace(" ", "%20");
-            URL url = new URL("http://wttr.in/" + urlLocation + "?format=j1");
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setConnectTimeout(12_000);
-            conn.setReadTimeout(12_000);
-            conn.setRequestProperty("User-Agent", "curl/7.0");
-
-            StringBuilder sb = new StringBuilder();
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(conn.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) sb.append(line);
-            }
-
-            String json = sb.toString();
-            wd.temp        = field(json, "temp_C");
-            wd.feelsLike   = field(json, "FeelsLikeC");
-            wd.humidity    = field(json, "humidity");
-            wd.windSpeed   = field(json, "windspeedKmph");
-            wd.windDir     = field(json, "winddir16Point");
-            wd.pressure    = field(json, "pressure");
-            wd.description = arrayValue(json, "weatherDesc");
-            wd.city        = arrayValue(json, "areaName");
-            wd.country     = arrayValue(json, "country");
-            wd.error       = null;
-        } catch (Exception e) {
-            wd.error = e.getClass().getSimpleName() + ":" + e.getMessage();
-        }
-        return wd;
-    }
-
-    static String field(String json, String key) {
-        String[] variants = {"\"" + key + "\":\"", "\"" + key + "\": \""};
-        for (String search : variants) {
-            int i = json.indexOf(search);
-            if (i >= 0) {
-                i += search.length();
-                int e = json.indexOf('"', i);
-                if (e > i) return json.substring(i, e);
-            }
-        }
-        return "--";
-    }
-
-    static String arrayValue(String json, String key) {
-        int i = json.indexOf("\"" + key + "\"");
-        if (i < 0) return "--";
-        int open = json.indexOf('[', i);
-        int close = json.indexOf(']', open);
-        if (open < 0 || close < 0 || close <= open) return "--";
-        return field(json.substring(open, close), "value");
-    }
-
     static String weatherSummaryForHud() {
-        if (weather == null) return "WX: n/a";
-        if (weather.error != null) {
-            return "WX ERR " + weather.error;
-        }
-        return String.format("WX %sC FL%s H%s%% W%s%s P%s",
-                nz(weather.temp), nz(weather.feelsLike), nz(weather.humidity),
-                nz(weather.windSpeed), nz(weather.windDir), nz(weather.pressure));
+        return WeatherService.weatherSummaryForHud(weather);
     }
 
     static String weatherSummaryForRadar() {
-        if (weather == null || weather.error != null) return "WX: N/A";
-        return String.format("WX %sC %s", nz(weather.temp), shortText(weather.description, 22));
+        return WeatherService.weatherSummaryForRadar(weather);
     }
 
     static String shortText(String s, int max) {
@@ -1615,20 +1400,7 @@ public class KindleDroneDetectorPro {
         return (s == null || s.isEmpty()) ? "--" : s;
     }
 
-    static class WeatherData {
-        String temp = "--", feelsLike = "--", humidity = "--";
-        String windSpeed = "--", windDir = "--", description = "--";
-        String city = "--", country = "--", pressure = "--";
-        String error = null;
-        long updatedAt = 0;
-
-        static WeatherData unavailable(String reason) {
-            WeatherData w = new WeatherData();
-            w.error = reason;
-            w.updatedAt = System.currentTimeMillis();
-            return w;
-        }
-    }
+    // Weather data model + HTTP parser moved to WeatherService.
 
     // =========================================================================
     // Console log
