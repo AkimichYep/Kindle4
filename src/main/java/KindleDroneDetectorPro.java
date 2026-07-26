@@ -13,6 +13,8 @@ public class KindleDroneDetectorPro {
     static final int PROBE_EVERY = 6;
     static final int IDLE_CRC_EVERY = 10;       // idle CRC measurement interval
     static final int MAXPERF_EVERY = 30;        // re-apply maxperf interval
+    static final int IDLE_CRC_THRESHOLD = 6;    // min idle CRC to count as external RF (2s window)
+    static final int IDLE_CRC_CONFIRM  = 3;     // consecutive hits needed before !!RF!!
     static final int BASELINE_LOOPS = 30;
     static final String LOG_FILE = "/mnt/us/drone_log.txt";
 
@@ -105,6 +107,7 @@ public class KindleDroneDetectorPro {
     static int noiseFloor = -96, csSnr = 0, linkQuality = 0;
     static boolean probeActive = false;
     static String lastRendered = "";
+    static String lastRenderSignature = "";
     static PrintWriter logWriter = null;
 
     // Idle CRC detection state
@@ -115,6 +118,13 @@ public class KindleDroneDetectorPro {
     // === Main ===
     public static void main(String[] args) {
         System.out.println("=== KindleDroneDetectorPro v2.1 ===");
+
+        // Prevent Kindle sleep for the duration of the detector run
+        exec("lipc-set-prop","com.lab126.powerd","preventScreenSaver","1");
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            exec("lipc-set-prop","com.lab126.powerd","preventScreenSaver","0");
+            System.out.println("Sleep restored.");
+        }));
 
         openLogFile();
         initFirmware();
@@ -202,12 +212,12 @@ public class KindleDroneDetectorPro {
         // Read CRC accumulated during idle
         idleCRC = readStats(false);
 
-        if (idleCRC > 3) {
+        if (idleCRC >= IDLE_CRC_THRESHOLD) {
             externalRFcount++;
-            if (externalRFcount >= 2) {
+            if (externalRFcount >= IDLE_CRC_CONFIRM) {
                 externalRF = true;
             }
-            String msg = "!! IDLE-CRC=" + idleCRC + " external RF detected (count=" + externalRFcount + ")";
+            String msg = "!! IDLE-CRC=" + idleCRC + " external RF (count=" + externalRFcount + "/" + IDLE_CRC_CONFIRM + ")";
             System.out.println(msg);
             logFile(msg);
         } else {
@@ -452,6 +462,10 @@ public class KindleDroneDetectorPro {
 
     // === E-Ink Render ===
     static void render(List<AP> aps, boolean alert) {
+        // Only redraw when visible AP/alert content changed; ignore loop/time churn.
+        String signature = buildRenderSignature(aps);
+        if (signature.equals(lastRenderSignature)) return;
+
         StringBuilder hud = new StringBuilder();
         int row=0;
 
@@ -465,7 +479,8 @@ public class KindleDroneDetectorPro {
 
         // External RF alert
         if (externalRF) {
-            hud.append("** EXTERNAL RF: idle-CRC=").append(idleCRC).append(" **\n"); row++;
+            hud.append(String.format("** EXT RF: iCRC=%d thr=%d cnt=%d/%d **\n",
+                    idleCRC, IDLE_CRC_THRESHOLD, externalRFcount, IDLE_CRC_CONFIRM)); row++;
         }
 
         // CRC burst alert
@@ -499,15 +514,41 @@ public class KindleDroneDetectorPro {
         if (aps.size() > ROWS-5) hud.append("...+").append(aps.size()-(ROWS-5)).append(" more\n");
 
         String content = hud.toString();
-
-        if (!content.equals(lastRendered)) {
-            if (alert) {
-                try { Runtime.getRuntime().exec(new String[]{"eips","-f"}).waitFor(); } catch(Exception e){}
-                sleep(300);
-            }
-            writeEink(content);
-            lastRendered = content;
+        if (alert) {
+            try { Runtime.getRuntime().exec(new String[]{"eips","-f"}).waitFor(); } catch(Exception e){}
+            sleep(300);
         }
+        writeEink(content);
+        lastRendered = content;
+        lastRenderSignature = signature;
+    }
+
+    static String buildRenderSignature(List<AP> aps) {
+        StringBuilder sb = new StringBuilder(256);
+        sb.append("rf=").append(externalRF)
+          .append("|i=").append(idleCRC)
+          .append("|b=").append(crcDelta > 200)
+          .append("|n=").append(noiseFloor)
+          .append("|s=").append(csSnr)
+          .append("|l=").append(linkQuality)
+          .append("|a=").append(armed);
+
+        for (AP a : aps) {
+            History h = tracker.get(a.mac);
+            sb.append('|').append(a.mac)
+              .append(',').append(a.ssid)
+              .append(',').append(a.channel)
+              .append(',').append(a.signalDbm)
+              .append(',').append(a.threat)
+              .append(',').append(a.flags);
+            if (h != null) {
+                sb.append(',').append(h.isNew)
+                  .append(',').append(h.isMoving)
+                  .append(',').append(h.isHopping)
+                  .append(',').append(h.isTransient);
+            }
+        }
+        return sb.toString();
     }
 
     static void writeEink(String text) {
