@@ -186,8 +186,10 @@ public class KindleDroneDetectorPro {
                 long newCRC = WifiScanner.readStats(statsResult, true);
                 ctx.crcDelta   = newCRC - prevCRC;
                 prevCRC        = newCRC;
-                ctx.noiseFloor = statsResult[1];
-                ctx.csSnr      = statsResult[2];
+                // NF / SNR are sourced only from /proc/net/wireless (every loop, above)
+                // so they stay mutually consistent (SNR = level − NF from one source).
+                // The firmware cs_snr/noise_floor are a different measurement (SNR to the
+                // associated AP) and must not be mixed into the same fields.
             }
 
             // ── Idle CRC ──────────────────────────────────────────────────────
@@ -357,7 +359,9 @@ public class KindleDroneDetectorPro {
             if (nr == null) {
                 nr = new NetRecord(a.mac);
                 knownNets.put(a.mac, nr);
-                ctx.statTotalScans++; // reuse field as unique-MAC counter
+                // NOTE: do NOT touch statTotalScans here — it counts scan loops
+                // (incremented once per main-loop iteration). Unique-MAC count is
+                // reported separately via knownNets.size().
                 if (ctx.armed && !baseline.contains(a.mac)) ctx.statNewArmed++;
             }
             nr.update(a);
