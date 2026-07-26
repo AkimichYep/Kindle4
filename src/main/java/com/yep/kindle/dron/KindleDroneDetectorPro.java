@@ -42,10 +42,10 @@ public class KindleDroneDetectorPro {
     static final int  ROAD_VIEW_SHOW_LOOPS  = 8;     // keep road-radar for ~40 s
     static final long HISTORY_VIEW_INTERVAL_MS = 180_000L; // show history every ~3 min
     static final long ROAD_VIEW_INTERVAL_MS    =  90_000L; // show road-radar every ~90 s
-    static final int  RADAR_DIST_DELTA_NEAR_M = 4;   // <= 60m
-    static final int  RADAR_DIST_DELTA_MID_M  = 6;   // 61..140m
-    static final int  RADAR_DIST_DELTA_FAR_M  = 8;   // 141..240m
-    static final int  RADAR_DIST_DELTA_VFAR_M = 10;  // > 240m
+    static final int  RADAR_DIST_DELTA_NEAR_M = 8;   // <= 60m   (noise ~±3m at 20m range after EMA)
+    static final int  RADAR_DIST_DELTA_MID_M  = 15;  // 61..140m (noise ~±10m at 100m range after EMA)
+    static final int  RADAR_DIST_DELTA_FAR_M  = 25;  // 141..240m
+    static final int  RADAR_DIST_DELTA_VFAR_M = 40;  // > 240m
     static final String WEATHER_LOCATION = "Kharkiv";
 
     // ── File paths ────────────────────────────────────────────────────────────
@@ -138,7 +138,7 @@ public class KindleDroneDetectorPro {
 
     /** Persistent record loaded from / saved to CSV. */
     static class NetRecord {
-        static final int DIST_KEEP = 12;
+        static final int DIST_KEEP = 16;
         String mac;
         String ssid;
         long   firstSeen;
@@ -150,6 +150,7 @@ public class KindleDroneDetectorPro {
         String obsTime = ""; // HH:mm wall-clock time of last observation
         int    lastDistM = -1;
         int    lastDistDeltaM = 0;
+        int    smoothedRssi = Integer.MIN_VALUE; // EMA-smoothed signal; resets each session
         Deque<Integer> distHistory = new ArrayDeque<>();
 
         NetRecord(String mac) {
@@ -162,14 +163,23 @@ public class KindleDroneDetectorPro {
         void update(AP a) {
             lastSeen = System.currentTimeMillis();
             seenCount++;
-            // Record wall-clock time of this observation (HH:mm)
             obsTime = String.format("%tR", lastSeen);
             if (a.signalDbm > peakSignal) peakSignal = a.signalDbm;
             if (a.ssid != null && !a.ssid.isEmpty() && !a.ssid.equals("[HIDDEN]")) ssid = a.ssid;
             if (oui == null || oui.isEmpty()) oui = DroneSignatures.lookupOUI(mac);
             if (!keyword) keyword = DroneSignatures.matchesKeyword(ssid);
 
-            int dm = (int) Math.round(a.dist);
+            // EMA on RSSI (α=0.25) before distance conversion.
+            // Raw scan RSSI has ±5 dBm noise; the log-scale formula amplifies that to
+            // ±15 m at close range and ±40 m at 100 m, causing false movement detection.
+            // EMA reduces residual noise to ~1.9 dBm (σ * sqrt(α/(2−α))).
+            if (smoothedRssi == Integer.MIN_VALUE) {
+                smoothedRssi = a.signalDbm;
+            } else {
+                smoothedRssi = (int) Math.round(0.25 * a.signalDbm + 0.75 * smoothedRssi);
+            }
+            int dm = (int) Math.round(WifiUtils.calculateDistance(smoothedRssi));
+
             if (lastDistM >= 0) lastDistDeltaM = dm - lastDistM;
             lastDistM = dm;
             pushDist(dm);
@@ -1128,15 +1138,18 @@ public class KindleDroneDetectorPro {
     }
 
     static double speedKmh(NetRecord nr) {
-        if (nr == null || nr.distHistory == null || nr.distHistory.size() < 2) return 0.0;
-        int first = nr.distHistory.peekFirst();
-        int last = nr.distHistory.peekLast();
-        int samples = nr.distHistory.size() - 1;
-        if (samples <= 0) return 0.0;
-        double seconds = samples * (FAST_MS / 1000.0);
-        if (seconds <= 0.0) return 0.0;
-        double mps = (last - first) / seconds;
-        return mps * 3.6;
+        if (nr == null || nr.distHistory == null || nr.distHistory.size() < 4) return 0.0;
+        List<Integer> hist = new ArrayList<>(nr.distHistory);
+        int n = hist.size();
+        // Average the oldest third vs newest third to suppress endpoint outliers.
+        // Single-point first/last is too noisy even after EMA.
+        int w = Math.max(1, n / 3);
+        double sumOld = 0, sumNew = 0;
+        for (int i = 0;     i < w; i++) sumOld += hist.get(i);
+        for (int i = n - w; i < n; i++) sumNew += hist.get(i);
+        double deltaM  = (sumNew - sumOld) / w;
+        double seconds = (n - 1) * (FAST_MS / 1000.0);
+        return (deltaM / seconds) * 3.6;
     }
 
     static String[] buildHistoryScreen() {
