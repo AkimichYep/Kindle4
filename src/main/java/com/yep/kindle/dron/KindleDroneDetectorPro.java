@@ -38,6 +38,8 @@ public class KindleDroneDetectorPro {
     static final int  RADAR_SNAPSHOT_MAX = 3;        // keep only this many timestamped radar PNGs
     static final int  HISTORY_EVERY_LOOPS = 36;      // show history page every ~3 min
     static final int  HISTORY_SHOW_LOOPS  = 6;       // keep history page for ~30 s
+    static final int  ROAD_VIEW_EVERY_LOOPS = 18;    // show road-radar every ~90 s
+    static final int  ROAD_VIEW_SHOW_LOOPS  = 8;     // keep road-radar for ~40 s
     static final int  RADAR_DIST_DELTA_NEAR_M = 4;   // <= 60m
     static final int  RADAR_DIST_DELTA_MID_M  = 6;   // 61..140m
     static final int  RADAR_DIST_DELTA_FAR_M  = 8;   // 141..240m
@@ -227,6 +229,7 @@ public class KindleDroneDetectorPro {
     // Which page is currently on screen: "weather", "history", "radar", "hud"
     static String currentPage = "";
     static int historyCountdown = 0;
+    static int roadCountdown = 0;
 
     // ── Row-level display diff ────────────────────────────────────────────────
     // Kindle screen is ROWS×COLS; we cache what was last written to each row.
@@ -362,6 +365,11 @@ public class KindleDroneDetectorPro {
                 historyCountdown = HISTORY_SHOW_LOOPS;
             }
 
+            // Road-radar page for moving APs (distance + estimated speed).
+            if (radarCountdown == 0 && loop % ROAD_VIEW_EVERY_LOOPS == 0 && hasRoadMovement()) {
+                roadCountdown = ROAD_VIEW_SHOW_LOOPS;
+            }
+
             // While radar is on screen: cycle through the last 3 saved frames
             // (Kindle-like animation — one frame per loop tick)
             if (radarCountdown > 0) {
@@ -397,7 +405,10 @@ public class KindleDroneDetectorPro {
             // ── Render / log ─────────────────────────────────────────────────
             // Default view is weather; periodically rotate in distance history.
             if (radarCountdown == 0) {
-                if (historyCountdown > 0) {
+                if (roadCountdown > 0) {
+                    renderRoadRadarPage();
+                    roadCountdown--;
+                } else if (historyCountdown > 0) {
                     renderHistoryPage();
                     historyCountdown--;
                 } else {
@@ -975,6 +986,107 @@ public class KindleDroneDetectorPro {
         }
     }
 
+    /**
+     * Render movement-centric road radar page: distance + speed estimate.
+     */
+    static void renderRoadRadarPage() {
+        String[] sc = buildRoadRadarScreen();
+        if (!"road".equals(currentPage)) {
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(150);
+            Arrays.fill(screenCache, "");
+            currentPage = "road";
+            logFile("DISPLAY -> road radar page");
+        }
+
+        boolean needClear = false;
+        for (int y = 0; y < KindleUtils.ROWS; y++) {
+            String cur = sc[y] != null ? sc[y] : "";
+            if (cur.length() < screenCache[y].length()) { needClear = true; break; }
+        }
+        if (needClear) {
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(100);
+            Arrays.fill(screenCache, "");
+        }
+        for (int y = 0; y < KindleUtils.ROWS; y++) {
+            String l = sc[y] != null ? sc[y] : "";
+            if (!l.equals(screenCache[y])) {
+                if (!l.isEmpty()) KindleUtils.exec("eips", "0", String.valueOf(y), l);
+                screenCache[y] = l;
+            }
+        }
+    }
+
+    static String[] buildRoadRadarScreen() {
+        String[] sc = new String[KindleUtils.ROWS];
+        Arrays.fill(sc, "");
+        int row = 0;
+        long now = System.currentTimeMillis();
+
+        sc[row++] = pad(String.format("* ROAD RADAR  %tT  loop#%d *", now, loop));
+        sc[row++] = pad(LINE_H);
+        sc[row++] = pad("AP           dist   dM  km/h dir age");
+        sc[row++] = pad(LINE_H);
+
+        List<NetRecord> recs = new ArrayList<>(knownNets.values());
+        recs.sort((a, b) -> Double.compare(Math.abs(speedKmh(b)), Math.abs(speedKmh(a))));
+
+        int shown = 0;
+        for (NetRecord nr : recs) {
+            if (row >= KindleUtils.ROWS - 2) break;
+            if (nr.distHistory.size() < 3) continue;
+
+            long ageMs = now - nr.lastSeen;
+            if (ageMs > 240_000L) continue; // keep view focused on recent roadside movement
+
+            double kmh = speedKmh(nr);
+            if (shown >= 14 && Math.abs(kmh) < 1.5) continue;
+
+            String name = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : nr.mac;
+            if (name.length() > 12) name = name.substring(0, 12);
+
+            int dist = nr.lastDistM >= 0 ? nr.lastDistM : nr.distHistory.peekLast();
+            String dmTag = formatDistDeltaTag(nr.lastDistDeltaM).trim();
+            String dir = kmh > 0.8 ? "AWAY" : (kmh < -0.8 ? "NEAR" : "----");
+            String age = shortText(formatLastSeen(ageMs), 6);
+
+            String ln = String.format("%-12s %4dm %4s %4.1f %-4s %s",
+                    name, dist, dmTag, Math.abs(kmh), dir, age);
+            sc[row++] = pad(ln);
+            shown++;
+        }
+
+        if (shown == 0 && row < KindleUtils.ROWS - 1) {
+            sc[row++] = pad("no recent moving APs yet");
+        }
+        if (row < KindleUtils.ROWS) sc[KindleUtils.ROWS - 1] = pad("dir: NEAR=towards you  AWAY=from you");
+
+        return sc;
+    }
+
+    static boolean hasRoadMovement() {
+        long now = System.currentTimeMillis();
+        for (NetRecord nr : knownNets.values()) {
+            if (nr.distHistory.size() < 3) continue;
+            if (now - nr.lastSeen > 240_000L) continue;
+            if (Math.abs(speedKmh(nr)) >= 1.0) return true;
+        }
+        return false;
+    }
+
+    static double speedKmh(NetRecord nr) {
+        if (nr == null || nr.distHistory == null || nr.distHistory.size() < 2) return 0.0;
+        int first = nr.distHistory.peekFirst();
+        int last = nr.distHistory.peekLast();
+        int samples = nr.distHistory.size() - 1;
+        if (samples <= 0) return 0.0;
+        double seconds = samples * (FAST_MS / 1000.0);
+        if (seconds <= 0.0) return 0.0;
+        double mps = (last - first) / seconds;
+        return mps * 3.6;
+    }
+
     static String[] buildHistoryScreen() {
         String[] sc = new String[KindleUtils.ROWS];
         Arrays.fill(sc, "");
@@ -1060,33 +1172,29 @@ public class KindleDroneDetectorPro {
         // ── Weather block ────────────────────────────────────────────────────
         if (weather == null || weather.error != null) {
             String errMsg = weather != null ? weather.error : "n/a";
-            // Truncate long error messages
-            if (errMsg != null && errMsg.length() > 28) errMsg = errMsg.substring(0, 28);
-            sc[row++] = pad("  WEATHER  unavailable");
-            sc[row++] = pad("  " + errMsg);
+            if (errMsg != null && errMsg.length() > 34) errMsg = errMsg.substring(0, 34);
+            sc[row++] = pad("  WEATHER: " + WEATHER_LOCATION + "  [OFFLINE]");
+            sc[row++] = pad("  ERR: " + errMsg);
         } else {
-            // City + condition headline
+            String icon = weatherIcon(nz(weather.description));
             String city = nz(weather.city);
-            if (city.length() > 14) city = city.substring(0, 14);
+            if (city.length() > 12) city = city.substring(0, 12);
             String desc = nz(weather.description);
             if (desc.length() > 20) desc = desc.substring(0, 20);
-            sc[row++] = pad(String.format("  %-14s  %s", city, desc));
-
-            // Temperature line
-            sc[row++] = pad(String.format("  Temp  %s C   Feels %s C",
-                    nz(weather.temp), nz(weather.feelsLike)));
-
-            // Wind + humidity
-            sc[row++] = pad(String.format("  Wind  %-3s km/h %-3s   Hum %s%%",
-                    nz(weather.windSpeed), nz(weather.windDir), nz(weather.humidity)));
-
-            // Pressure + update age
+            // [icon] condition          city
+            sc[row++] = pad(String.format("  %s %-20s  %s", icon, desc, city));
+            // Temp + feels + humidity on one line
+            sc[row++] = pad(String.format("  Temp:%sC  Feels:%sC  Hum:%s%%",
+                    nz(weather.temp), nz(weather.feelsLike), nz(weather.humidity)));
+            // Wind direction + speed + pressure
+            sc[row++] = pad(String.format("  Wind:%-3s %3skm/h  Pres:%4shPa",
+                    nz(weather.windDir), nz(weather.windSpeed), nz(weather.pressure)));
+            // Update age
             long ageSec = (now - weather.updatedAt) / 1000L;
             String ageStr = ageSec < 60 ? ageSec + "s ago"
                           : ageSec < 3600 ? (ageSec/60) + "m ago"
                           : (ageSec/3600) + "h ago";
-            sc[row++] = pad(String.format("  Pres  %s hPa       upd %s",
-                    nz(weather.pressure), ageStr));
+            sc[row++] = pad("  upd: " + ageStr);
         }
 
         sc[row++] = pad(LINE_H);
@@ -1398,6 +1506,21 @@ public class KindleDroneDetectorPro {
 
     static String nz(String s) {
         return (s == null || s.isEmpty()) ? "--" : s;
+    }
+
+    static String weatherIcon(String desc) {
+        if (desc == null || desc.equals("--")) return "[??]";
+        String d = desc.toLowerCase();
+        if (d.contains("thunder") || d.contains("storm"))                   return "[!!]";
+        if (d.contains("blizzard") || d.contains("sleet"))                  return "[**]";
+        if (d.contains("snow") || d.contains("flurr"))                      return "[**]";
+        if (d.contains("drizzle"))                                           return "[.~]";
+        if (d.contains("rain") || d.contains("shower"))                     return "[~~]";
+        if (d.contains("fog") || d.contains("mist") || d.contains("haze")) return "[..]";
+        if (d.contains("overcast"))                                          return "[CC]";
+        if (d.contains("cloud"))                                             return "[Cc]";
+        if (d.contains("clear") || d.contains("sunny") || d.contains("sun")) return "[<>]";
+        return "[ -]";
     }
 
     // Weather data model + HTTP parser moved to WeatherService.
