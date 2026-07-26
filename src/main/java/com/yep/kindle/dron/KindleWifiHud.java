@@ -1,3 +1,5 @@
+package com.yep.kindle.dron;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.time.LocalTime;
@@ -14,23 +16,8 @@ public class KindleWifiHud {
         AccessPoint(String ssid, int signalDbm) {
             this.ssid = ssid;
             this.signalDbm = signalDbm;
-            this.distanceMeters = calculateDistance(signalDbm);
+            this.distanceMeters = WifiUtils.calculateDistance(signalDbm);
         }
-    }
-
-    /**
-     * Converts Wi-Fi signal strength (dBm) to approximate distance in meters.
-     * Uses the free-space path loss model with typical Wi-Fi parameters.
-     * Formula: distance = 10^((TxPower - RSSI) / (10 * N))
-     * TxPower: -30 dBm (typical for Wi-Fi access points)
-     * N: 2.7 (path loss exponent for 2.4 GHz indoor environment)
-     */
-    private static double calculateDistance(int signalDbm) {
-        final int TX_POWER = -30; // Typical transmit power in dBm
-        final double PATH_LOSS_EXPONENT = 2.7; // For 2.4 GHz indoor
-
-        double distance = Math.pow(10.0, ((double) (TX_POWER - signalDbm) / (10.0 * PATH_LOSS_EXPONENT)));
-        return Math.max(distance, 0.5); // Minimum 0.5m to avoid invalid values
     }
 
     public static void main(String[] args) {
@@ -115,38 +102,13 @@ public class KindleWifiHud {
                     }
                 }
 
-                renderToEInk(hudText.toString());
+                KindleUtils.renderToEInk(hudText.toString());
 
             } catch (Exception e) {
                 System.err.println("HUD Error: " + e.getMessage());
             }
 
-            try {
-                Thread.sleep(10000); // Wait 10 seconds before next scan loop
-            } catch (InterruptedException ignored) {
-            }
-        }
-    }
-
-    private static void renderToEInk(String text) {
-        try {
-            Process clearProc = Runtime.getRuntime().exec(new String[]{"eips", "-c"});
-            clearProc.waitFor();
-
-            String[] lines = text.split("\n");
-            int y = 0;
-            for (String l : lines) {
-                if (y < 40 && !l.isEmpty()) { // 40 text rows on Kindle 4 (600x800)
-                    if (l.length() > 50) {    // 50 columns wide (12px cells)
-                        l = l.substring(0, 50);
-                    }
-                    Process p = Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l});
-                    p.waitFor();
-                    y++;
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("E-Ink render error: " + e.getMessage());
+            KindleUtils.sleep(10000);
         }
     }
 }

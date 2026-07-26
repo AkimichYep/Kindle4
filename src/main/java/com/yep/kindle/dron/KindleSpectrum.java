@@ -1,3 +1,5 @@
+package com.yep.kindle.dron;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.time.LocalTime;
@@ -53,10 +55,6 @@ public class KindleSpectrum {
             2.472   // ch13
     };
     private static final int MAX_CH = 13;
-
-    // Kindle 4 e-ink text mode (eips): 50 columns x 40 rows (600x800, 12x20 font).
-    private static final int MAX_SCREEN_ROWS = 40;
-    private static final int MAX_SCREEN_COLS = 50;
 
     static class ChannelStats {
         int apCount = 0;
@@ -129,10 +127,7 @@ public class KindleSpectrum {
                 System.err.println("Spectrum error: " + e.getMessage());
             }
 
-            try {
-                Thread.sleep(3000);
-            } catch (InterruptedException ignored) {
-            }
+            KindleUtils.sleep(3000);
         }
     }
 
@@ -248,10 +243,7 @@ public class KindleSpectrum {
             }
 
             // 2) Dwell so the radio settles
-            try {
-                Thread.sleep(150);
-            } catch (InterruptedException ignored) {
-            }
+            KindleUtils.sleep(150);
 
             // 3) Read live noise floor from /proc/net/wireless
             int noise = readNoiseFloor();
@@ -264,47 +256,9 @@ public class KindleSpectrum {
         passiveScan(spectrum, observations);
     }
 
-    /**
-     * Reads the noise level column from /proc/net/wireless.
-     * <p>
-     * Typical format:
-     * Inter-| sta-|  Quality       | Discarded packets ...
-     * face | tus | link level noise ...
-     * wlan0: 0000   54.  -56.  -95.  ...
-     * <p>
-     * Columns after "wlan0:" are: status, link, level, noise.
-     * Values may carry a trailing '.'; noise is a negative dBm figure.
-     */
     private static int readNoiseFloor() {
-        try {
-            Process p = Runtime.getRuntime().exec(new String[]{"cat", "/proc/net/wireless"});
-            p.waitFor();
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            while ((line = r.readLine()) != null) {
-                line = line.trim();
-                if (line.startsWith("wlan0")) {
-                    // Strip iface label, then split remaining numeric columns.
-                    int colon = line.indexOf(':');
-                    String rest = (colon >= 0 ? line.substring(colon + 1) : line).trim();
-                    String[] parts = rest.split("\\s+");
-                    // parts: [status, link, level, noise, ...]
-                    if (parts.length >= 4) {
-                        // Remove trailing '.' and parse as integer
-                        String noiseStr = parts[3].replace(".", "").trim();
-                        r.close();
-                        int noise = Integer.parseInt(noiseStr);
-                        // /proc reports level/noise as signed 8-bit sometimes (0-255).
-                        // Convert values >127 to their negative equivalent.
-                        if (noise > 127) noise = noise - 256;
-                        return noise;
-                    }
-                }
-            }
-            r.close();
-        } catch (Exception ignored) {
-        }
-        return -999;
+        int[] r = WifiUtils.readProcWireless();
+        return r != null ? r[2] : -999;
     }
 
     /**
@@ -349,7 +303,7 @@ public class KindleSpectrum {
         } else {
             int shown = 0;
             for (HopRecord h : hoppers) {
-                if (rows >= MAX_SCREEN_ROWS - 4 || shown >= 8) break;
+                if (rows >= KindleUtils.ROWS - 4 || shown >= 8) break;
                 // Build channel trail like C6>3>11
                 StringBuilder trail = new StringBuilder();
                 for (int i = 0; i < h.channelHistory.size(); i++) {
@@ -360,7 +314,7 @@ public class KindleSpectrum {
                 String macShort = h.mac.length() >= 8 ? h.mac.substring(0, 8) : h.mac;
                 String row = String.format("!%s h%d %s %ddB %s",
                         macShort, h.hopCount, trail.toString(), h.lastSignal, h.ssid);
-                if (row.length() > MAX_SCREEN_COLS) row = row.substring(0, MAX_SCREEN_COLS);
+                if (row.length() > KindleUtils.COLS) row = row.substring(0, KindleUtils.COLS);
                 hud.append(row).append("\n");
                 rows++;
                 shown++;
@@ -370,22 +324,22 @@ public class KindleSpectrum {
         // ---- Per-channel network detail (fills remaining rows) ----
         hud.append("== CHANNELS ==\n");
         rows++;
-        for (int c = 1; c <= MAX_CH && rows < MAX_SCREEN_ROWS; c++) {
+        for (int c = 1; c <= MAX_CH && rows < KindleUtils.ROWS; c++) {
             ChannelStats cs = spectrum.get(c);
             if (cs.apCount == 0) continue;
 
             String noiseStr = validNoise(cs.noiseDbm) ? (cs.noiseDbm + "dB") : "";
             String head = String.format("C%-2d %.3fG %dAP peak%ddB %s",
                     c, CH_FREQ[c], cs.apCount, cs.peakDbm, noiseStr);
-            if (head.length() > MAX_SCREEN_COLS) head = head.substring(0, MAX_SCREEN_COLS);
+            if (head.length() > KindleUtils.COLS) head = head.substring(0, KindleUtils.COLS);
             hud.append(head).append("\n");
             rows++;
 
             for (String ssid : cs.ssids) {
-                if (rows >= MAX_SCREEN_ROWS) break;
+                if (rows >= KindleUtils.ROWS) break;
                 String s = (ssid == null || ssid.isEmpty()) ? "[hidden]" : ssid;
                 String row = "  - " + s;
-                if (row.length() > MAX_SCREEN_COLS) row = row.substring(0, MAX_SCREEN_COLS);
+                if (row.length() > KindleUtils.COLS) row = row.substring(0, KindleUtils.COLS);
                 hud.append(row).append("\n");
                 rows++;
             }
@@ -412,31 +366,11 @@ public class KindleSpectrum {
             }
         }
 
-        renderToEInk(hud.toString());
+        KindleUtils.renderToEInk(hud.toString());
     }
 
-    /**
-     * Noise floor is always negative (~ -90 to -100 dBm). Reject bogus values.
-     */
     private static boolean validNoise(int noise) {
         return noise != -999 && noise < 0 && noise > -130;
-    }
-
-    private static void renderToEInk(String text) {
-        try {
-            Runtime.getRuntime().exec(new String[]{"eips", "-c"}).waitFor();
-            String[] lines = text.split("\n");
-            int y = 0;
-            for (String l : lines) {
-                if (y < MAX_SCREEN_ROWS && !l.isEmpty()) {
-                    if (l.length() > MAX_SCREEN_COLS) l = l.substring(0, MAX_SCREEN_COLS);
-                    Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l}).waitFor();
-                    y++;
-                }
-            }
-        } catch (Exception e) {
-            System.err.println("E-Ink render error: " + e.getMessage());
-        }
     }
 }
 

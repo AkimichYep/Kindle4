@@ -1,17 +1,17 @@
+package com.yep.kindle.dron;
+
 import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.time.LocalDateTime;
 
-public class KindleTcpListener {
+public class KindleDisplay {
     private static final int PORT = 5555;
 
     public static void main(String[] args) {
-        System.out.println("=== Kindle TCP Drone Listener Active on port " + PORT + " ===");
+        System.out.println("=== Kindle E-Ink Wi-Fi HUD Active ===");
         try {
-            // Explicitly bind to 0.0.0.0 (all interfaces, including wlan0)
             ServerSocket serverSocket = new ServerSocket();
             serverSocket.bind(new InetSocketAddress("0.0.0.0", PORT));
 
@@ -19,17 +19,23 @@ public class KindleTcpListener {
                 try (Socket clientSocket = serverSocket.accept();
                      BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()))) {
 
-                    String line = reader.readLine();
-                    if (line != null) {
-                        String timestamp = LocalDateTime.now().toString();
-                        System.out.println("[" + timestamp + "] RECEIVED: " + line);
+                    String line;
+                    StringBuilder payload = new StringBuilder();
+                    while ((line = reader.readLine()) != null) {
+                        payload.append(line).append("\n");
+                    }
+
+                    if (payload.length() > 0) {
+                        System.out.println("[E-INK UPDATE]:\n" + payload.toString());
+                        KindleUtils.renderToEInk(payload.toString());
                     }
                 } catch (Exception e) {
-                    System.err.println("Read error: " + e.getMessage());
+                    System.err.println("Display read error: " + e.getMessage());
                 }
             }
         } catch (Exception e) {
             System.err.println("Server exception: " + e.getMessage());
         }
     }
+
 }

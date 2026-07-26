@@ -1,3 +1,5 @@
+package com.yep.kindle.dron;
+
 import java.io.BufferedReader;
 import java.io.FileWriter;
 import java.io.InputStreamReader;
@@ -6,48 +8,15 @@ import java.util.*;
 
 public class KindleDroneDetectorPro {
 
-    static final int ROWS = 40;
-    static final int COLS = 50;
     static final int FAST_MS = 5000;
     static final int STATS_EVERY = 5;
     static final int PROBE_EVERY = 6;
-    static final int IDLE_CRC_EVERY = 10;       // idle CRC measurement interval
-    static final int MAXPERF_EVERY = 30;        // re-apply maxperf interval
-    static final int IDLE_CRC_THRESHOLD = 6;    // min idle CRC to count as external RF (2s window)
-    static final int IDLE_CRC_CONFIRM = 3;     // consecutive hits needed before !!RF!!
+    static final int IDLE_CRC_EVERY = 10;
+    static final int MAXPERF_EVERY = 30;
+    static final int IDLE_CRC_THRESHOLD = 6;
+    static final int IDLE_CRC_CONFIRM = 3;
     static final int BASELINE_LOOPS = 30;
     static final String LOG_FILE = "/mnt/us/drone_log.txt";
-
-    static final Map<String, String> DRONE_OUI = new HashMap<>();
-
-    static {
-        DRONE_OUI.put("60:60:1F", "DJI");
-        DRONE_OUI.put("34:D2:62", "DJI");
-        DRONE_OUI.put("0C:43:96", "DJI");
-        DRONE_OUI.put("18:97:D0", "DJI");
-        DRONE_OUI.put("48:1C:B9", "DJI");
-        DRONE_OUI.put("E4:7A:2C", "DJI");
-        DRONE_OUI.put("A4:77:61", "DJI");
-        DRONE_OUI.put("FC:77:74", "DJI");
-        DRONE_OUI.put("DC:54:75", "DJI");
-        DRONE_OUI.put("C8:4D:44", "DJI");
-        DRONE_OUI.put("00:26:19", "Parrot");
-        DRONE_OUI.put("00:12:1C", "Parrot");
-        DRONE_OUI.put("90:03:B7", "Parrot");
-        DRONE_OUI.put("A0:14:3D", "Parrot");
-        DRONE_OUI.put("94:E3:6D", "Autel");
-        DRONE_OUI.put("38:1D:14", "Skydio");
-        DRONE_OUI.put("E0:B6:F5", "Yuneec");
-        DRONE_OUI.put("24:0A:C4", "ESP32");
-        DRONE_OUI.put("30:AE:A4", "ESP32");
-        DRONE_OUI.put("7C:9E:BD", "ESP32");
-        DRONE_OUI.put("A4:CF:12", "ESP32");
-    }
-
-    static final String[] DRONE_KW = {
-            "drone", "dji", "mavic", "tello", "phantom", "spark", "parrot", "anafi",
-            "bebop", "fpv", "skydio", "autel", "yuneec", "avata", "inspire", "matrice"
-    };
 
     static final String[] PROBE_SSIDS = {
             "TELLO-", "DJI-", "Spark-", "PHANTOM", "Mavic-", "ANAFI-",
@@ -128,23 +97,20 @@ public class KindleDroneDetectorPro {
     static long prevCRC = 0, crcDelta = 0;
     static int noiseFloor = -96, csSnr = 0, linkQuality = 0;
     static boolean probeActive = false;
-    static String lastRendered = "";
     static String lastRenderSignature = "";
     static PrintWriter logWriter = null;
 
-    // Idle CRC detection state
     static long idleCRC = 0;
     static boolean externalRF = false;
-    static int externalRFcount = 0;     // consecutive idle CRC detections
+    static int externalRFcount = 0;
 
     // === Main ===
     public static void main(String[] args) {
         System.out.println("=== KindleDroneDetectorPro v2.1 ===");
 
-        // Prevent Kindle sleep for the duration of the detector run
-        exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "1");
+        KindleUtils.exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "1");
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "0");
+            KindleUtils.exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "0");
             System.out.println("Sleep restored.");
         }));
 
@@ -156,46 +122,38 @@ public class KindleDroneDetectorPro {
             long t0 = System.currentTimeMillis();
             loop++;
 
-            // Re-apply maxperf periodically (Kindle resets to "rec")
             if (loop % MAXPERF_EVERY == 0) {
-                exec("wmiconfig", "-i", "wlan0", "--power", "maxperf");
+                KindleUtils.exec("wmiconfig", "-i", "wlan0", "--power", "maxperf");
             }
 
-            // Pre-scan: probe setting
             if (loop % PROBE_EVERY == 0) {
                 String probe = PROBE_SSIDS[(loop / PROBE_EVERY) % PROBE_SSIDS.length];
-                exec("wmiconfig", "-i", "wlan0", "--scanprobedssid", probe);
+                KindleUtils.exec("wmiconfig", "-i", "wlan0", "--scanprobedssid", probe);
                 probeActive = true;
                 logFile("PROBE: " + probe);
             } else if (probeActive) {
-                exec("wmiconfig", "-i", "wlan0", "--scanprobedssid", "any");
+                KindleUtils.exec("wmiconfig", "-i", "wlan0", "--scanprobedssid", "any");
                 probeActive = false;
             }
 
-            // Scan
             List<AP> aps = scan();
             temporal(aps);
 
-            // Fast noise/signal from /proc/net/wireless (every loop, cheap)
             readProcWireless();
 
-            // Firmware stats via wmiconfig (expensive, less frequent)
             if (loop % STATS_EVERY == 0) {
                 long newCRC = readStats(true);
                 crcDelta = newCRC - prevCRC;
                 prevCRC = newCRC;
             }
 
-            // Idle CRC measurement: detect external RF on home channel
             if (loop % IDLE_CRC_EVERY == 0) {
                 measureIdleCRC();
             }
 
-            // Score
             score(aps);
             aps.sort((a, b) -> b.threat != a.threat ? b.threat - a.threat : Double.compare(a.dist, b.dist));
 
-            // Learning
             if (loop <= BASELINE_LOOPS) {
                 for (AP a : aps) baseline.add(a.mac);
                 if (loop == BASELINE_LOOPS) {
@@ -205,87 +163,45 @@ public class KindleDroneDetectorPro {
                 }
             }
 
-            // Alert level
             int maxThreat = aps.isEmpty() ? 0 : aps.get(0).threat;
 
-            // Render
             render(aps, maxThreat >= 60 || externalRF);
-
-            // Console log
             log(aps);
-
-            // File log
             logLoopToFile(aps, maxThreat);
 
-            // Wait
             long wait = FAST_MS - (System.currentTimeMillis() - t0);
-            if (wait > 0) sleep(wait);
+            if (wait > 0) KindleUtils.sleep(wait);
         }
     }
 
     // === Idle CRC Measurement ===
-    // Measures CRC errors during a brief period of NO scanning.
-    // Any CRC errors during idle = external RF on home channel.
     static void measureIdleCRC() {
-        // Clear stats
-        exec("wmiconfig", "-i", "wlan0", "--getTargetStats", "--clearStats");
-        // Idle listen (no scanning, radio stays on home channel)
-        sleep(2000);
-        // Read CRC accumulated during idle
+        KindleUtils.exec("wmiconfig", "-i", "wlan0", "--getTargetStats", "--clearStats");
+        KindleUtils.sleep(2000);
         idleCRC = readStats(false);
 
         if (idleCRC >= IDLE_CRC_THRESHOLD) {
             externalRFcount++;
-            if (externalRFcount >= IDLE_CRC_CONFIRM) {
-                externalRF = true;
-            }
+            if (externalRFcount >= IDLE_CRC_CONFIRM) externalRF = true;
             String msg = "!! IDLE-CRC=" + idleCRC + " external RF (count=" + externalRFcount + "/" + IDLE_CRC_CONFIRM + ")";
             System.out.println(msg);
             logFile(msg);
         } else {
-            // Decay: require consecutive non-detections to clear
             if (externalRFcount > 0) externalRFcount--;
             if (externalRFcount == 0) externalRF = false;
         }
 
-        // Re-clear for normal operation delta tracking
-        long fresh = readStats(true);
-        prevCRC = fresh;
+        prevCRC = readStats(true);
         crcDelta = 0;
     }
 
     // === Fast /proc/net/wireless reader ===
-    // Returns live signal/noise without spawning wmiconfig.
-    // Format: wlan0: SSSS  LL  LVL  NNN  ...
-    //   level and noise are unsigned; subtract 256 if > 127 for dBm.
     static void readProcWireless() {
-        try {
-            Process p = Runtime.getRuntime().exec(new String[]{"cat", "/proc/net/wireless"});
-            p.waitFor();
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            while ((line = r.readLine()) != null) {
-                if (line.trim().startsWith("wlan0")) {
-                    String[] parts = line.trim().split("\\s+");
-                    // parts: [wlan0:, status, link, level, noise, ...]
-                    if (parts.length >= 5) {
-                        try {
-                            linkQuality = Integer.parseInt(parts[2].replace(".", "").trim());
-                            int level = Integer.parseInt(parts[3].replace(".", "").trim());
-                            int noise = Integer.parseInt(parts[4].replace(".", "").trim());
-                            if (level > 127) level -= 256;
-                            if (noise > 127) noise -= 256;
-                            noiseFloor = noise;
-                            // csSnr can be derived: level - noise
-                            csSnr = level - noise;
-                        } catch (Exception ignored) {
-                        }
-                    }
-                    break;
-                }
-            }
-            r.close();
-        } catch (Exception ignored) {
+        int[] r = WifiUtils.readProcWireless();
+        if (r != null) {
+            linkQuality = r[0];
+            noiseFloor = r[2];
+            csSnr = r[1] - r[2];
         }
     }
 
@@ -300,9 +216,7 @@ public class KindleDroneDetectorPro {
     }
 
     static void logFile(String msg) {
-        if (logWriter != null) {
-            logWriter.printf("%tT %s%n", System.currentTimeMillis(), msg);
-        }
+        if (logWriter != null) logWriter.printf("%tT %s%n", System.currentTimeMillis(), msg);
     }
 
     static void logLoopToFile(List<AP> aps, int maxThreat) {
@@ -316,8 +230,7 @@ public class KindleDroneDetectorPro {
             for (AP a : aps) {
                 if (a.threat > 0 && count < 5) {
                     String macShort = a.mac.length() > 9 ? a.mac.substring(9) : a.mac;
-                    sb.append(String.format(" | %d:%s(%s)%ddB",
-                            a.threat, macShort, a.flags, a.signalDbm));
+                    sb.append(String.format(" | %d:%s(%s)%ddB", a.threat, macShort, a.flags, a.signalDbm));
                     count++;
                 }
             }
@@ -327,15 +240,15 @@ public class KindleDroneDetectorPro {
 
     // === Firmware Init ===
     static void initFirmware() {
-        exec("wmiconfig", "-i", "wlan0", "--power", "maxperf");
-        sleep(200);
-        exec("wmiconfig", "-i", "wlan0", "--scan",
+        KindleUtils.exec("wmiconfig", "-i", "wlan0", "--power", "maxperf");
+        KindleUtils.sleep(200);
+        KindleUtils.exec("wmiconfig", "-i", "wlan0", "--scan",
                 "--fgstart=1", "--fgend=1", "--bg=3",
                 "--minact=30", "--maxact=150", "--pas=200",
                 "--scanctrlflags", "1", "1", "1", "1", "1", "1");
-        sleep(200);
-        exec("wmiconfig", "-i", "wlan0", "--getTargetStats", "--clearStats");
-        sleep(200);
+        KindleUtils.sleep(200);
+        KindleUtils.exec("wmiconfig", "-i", "wlan0", "--getTargetStats", "--clearStats");
+        KindleUtils.sleep(200);
         System.out.println("FW: maxperf, 200ms dwell, BSS reporting ON");
     }
 
@@ -351,10 +264,7 @@ public class KindleDroneDetectorPro {
             while ((line = r.readLine()) != null) {
                 String t = line.trim();
                 if (t.contains("Address:")) {
-                    if (cur != null && cur.signalDbm != -999) {
-                        fin(cur);
-                        list.add(cur);
-                    }
+                    if (cur != null && cur.signalDbm != -999) { fin(cur); list.add(cur); }
                     cur = new AP();
                     cur.mac = t.substring(t.indexOf("Address:") + 9).trim();
                 } else if (cur == null) continue;
@@ -366,28 +276,18 @@ public class KindleDroneDetectorPro {
                 } else if (t.startsWith("Mode:")) cur.mode = t.substring(5).trim();
                 else if (t.startsWith("Frequency:")) {
                     int ci = t.indexOf("Channel");
-                    if (ci > 0) try {
-                        cur.channel = Integer.parseInt(t.substring(ci + 8).replace(")", "").trim());
-                    } catch (Exception e) {
-                    }
+                    if (ci > 0) try { cur.channel = Integer.parseInt(t.substring(ci + 8).replace(")", "").trim()); } catch (Exception ignored) {}
                 } else if (t.contains("Signal level=")) {
                     try {
                         int si = t.indexOf("Signal level=") + 13;
                         int se = t.indexOf(" dBm", si);
                         if (se > si) cur.signalDbm = Integer.parseInt(t.substring(si, se).trim());
-                    } catch (Exception e) {
-                    }
+                    } catch (Exception ignored) {}
                 } else if (t.contains("WPA2") || t.contains("802.11i")) cur.encryption = "WPA2";
-                else if (t.contains("WPA Version")) {
-                    if (!cur.encryption.equals("WPA2")) cur.encryption = "WPA";
-                } else if (t.startsWith("Encryption key:on")) {
-                    if (cur.encryption.equals("Open")) cur.encryption = "WEP";
-                }
+                else if (t.contains("WPA Version")) { if (!cur.encryption.equals("WPA2")) cur.encryption = "WPA"; }
+                else if (t.startsWith("Encryption key:on")) { if (cur.encryption.equals("Open")) cur.encryption = "WEP"; }
             }
-            if (cur != null && cur.signalDbm != -999) {
-                fin(cur);
-                list.add(cur);
-            }
+            if (cur != null && cur.signalDbm != -999) { fin(cur); list.add(cur); }
             r.close();
         } catch (Exception e) {
             System.err.println("scan err: " + e.getMessage());
@@ -396,25 +296,16 @@ public class KindleDroneDetectorPro {
     }
 
     static void fin(AP a) {
-        a.dist = Math.max(0.5, Math.pow(10.0, (-30.0 - a.signalDbm) / 27.0));
-        if (a.ssid == null || a.ssid.isEmpty()) {
-            a.ssid = "[HIDDEN]";
-            a.hidden = true;
-        }
+        a.dist = WifiUtils.calculateDistance(a.signalDbm);
+        if (a.ssid == null || a.ssid.isEmpty()) { a.ssid = "[HIDDEN]"; a.hidden = true; }
     }
 
     // === Temporal Engine ===
     static void temporal(List<AP> aps) {
-        for (History h : tracker.values()) {
-            h.seenPrev = h.seenNow;
-            h.seenNow = false;
-        }
+        for (History h : tracker.values()) { h.seenPrev = h.seenNow; h.seenNow = false; }
         for (AP a : aps) {
             History h = tracker.get(a.mac);
-            if (h == null) {
-                h = new History(a.mac);
-                tracker.put(a.mac, h);
-            }
+            if (h == null) { h = new History(a.mac); tracker.put(a.mac, h); }
             h.add(a.signalDbm, a.channel);
             h.ssid = a.ssid;
             h.seenNow = true;
@@ -429,7 +320,7 @@ public class KindleDroneDetectorPro {
         }
     }
 
-    // === Firmware Stats (single call) ===
+    // === Firmware Stats ===
     static long readStats(boolean updateNoise) {
         long crc = 0;
         try {
@@ -442,20 +333,13 @@ public class KindleDroneDetectorPro {
                 if (line.startsWith("rx_crcerr")) {
                     crc = Long.parseLong(line.split("=")[1].trim());
                 } else if (updateNoise && line.startsWith("noise_floor")) {
-                    try {
-                        noiseFloor = Integer.parseInt(line.split("=")[1].trim());
-                    } catch (Exception ignored) {
-                    }
+                    try { noiseFloor = Integer.parseInt(line.split("=")[1].trim()); } catch (Exception ignored) {}
                 } else if (updateNoise && line.startsWith("cs_snr")) {
-                    try {
-                        csSnr = Integer.parseInt(line.split("=")[1].trim().split("\\s")[0]);
-                    } catch (Exception ignored) {
-                    }
+                    try { csSnr = Integer.parseInt(line.split("=")[1].trim().split("\\s")[0]); } catch (Exception ignored) {}
                 }
             }
             r.close();
-        } catch (Exception e) {
-        }
+        } catch (Exception ignored) {}
         return crc;
     }
 
@@ -465,68 +349,30 @@ public class KindleDroneDetectorPro {
             int s = 0;
             StringBuilder f = new StringBuilder();
 
-            // OUI match
-            String v = getOUI(a.mac);
-            if (v != null) {
-                s += 50;
-                f.append(v).append(" ");
-            }
+            String v = DroneSignatures.lookupOUI(a.mac);
+            if (v != null) { s += 50; f.append(v).append(" "); }
 
-            // SSID keyword
-            if (matchKW(a.ssid)) {
-                s += 40;
-                f.append("SSID ");
-            }
+            if (DroneSignatures.matchesKeyword(a.ssid)) { s += 40; f.append("SSID "); }
 
-            // Hidden within 80m
-            if (a.hidden && a.dist < 80) {
-                s += 15;
-                f.append("HID ");
-            }
+            if (a.hidden && a.dist < 80) { s += 15; f.append("HID "); }
 
-            // Temporal
             History h = tracker.get(a.mac);
             if (h != null) {
-                if (h.isNew && armed && !baseline.contains(a.mac) && a.signalDbm > -80) {
-                    s += 25;
-                    f.append("NEW ");
-                }
-                if (h.isMoving) {
-                    s += 20;
-                    f.append("MOV ");
-                }
-                if (h.isHopping) {
-                    s += 20;
-                    f.append("HOP ");
-                }
-                if (h.isTransient) {
-                    s += 15;
-                    f.append("TRN ");
-                }
+                if (h.isNew && armed && !baseline.contains(a.mac) && a.signalDbm > -80) { s += 25; f.append("NEW "); }
+                if (h.isMoving) { s += 20; f.append("MOV "); }
+                if (h.isHopping) { s += 20; f.append("HOP "); }
+                if (h.isTransient) { s += 15; f.append("TRN "); }
             }
 
-            // Non-master mode
-            if (a.mode != null && !a.mode.isEmpty() && !a.mode.equals("Master")) {
-                s += 20;
-                f.append("ADH ");
-            }
+            if (a.mode != null && !a.mode.isEmpty() && !a.mode.equals("Master")) { s += 20; f.append("ADH "); }
 
-            // Strong new device
-            if (armed && !baseline.contains(a.mac) && a.signalDbm > -65) {
-                s += 20;
-                f.append("STR ");
-            }
+            if (armed && !baseline.contains(a.mac) && a.signalDbm > -65) { s += 20; f.append("STR "); }
 
-            // Random MAC
             if (a.mac.length() >= 2) {
                 try {
                     int firstByte = Integer.parseInt(a.mac.substring(0, 2), 16);
-                    if ((firstByte & 0x02) != 0) {
-                        s += 10;
-                        f.append("RMAC ");
-                    }
-                } catch (Exception ignored) {
-                }
+                    if ((firstByte & 0x02) != 0) { s += 10; f.append("RMAC "); }
+                } catch (Exception ignored) {}
             }
 
             a.threat = Math.min(s, 100);
@@ -534,57 +380,36 @@ public class KindleDroneDetectorPro {
         }
     }
 
-    static String getOUI(String mac) {
-        if (mac == null || mac.length() < 8) return null;
-        return DRONE_OUI.get(mac.substring(0, 8).toUpperCase());
-    }
-
-    static boolean matchKW(String ssid) {
-        if (ssid == null) return false;
-        String l = ssid.toLowerCase();
-        for (String k : DRONE_KW) if (l.contains(k)) return true;
-        return false;
-    }
-
     // === E-Ink Render ===
     static void render(List<AP> aps, boolean alert) {
-        // Only redraw when visible AP/alert content changed; ignore loop/time churn.
         String signature = buildRenderSignature(aps);
         if (signature.equals(lastRenderSignature)) return;
 
         StringBuilder hud = new StringBuilder();
         int row = 0;
 
-        // Header
         int thr = 0;
         for (AP a : aps) if (a.threat >= 30) thr++;
         hud.append(String.format("DRONE %tT AP:%d THR:%d #%d",
                 System.currentTimeMillis(), aps.size(), thr, loop)).append("\n");
         row++;
         hud.append(String.format("CRC+%d NF:%d SNR:%d LQ:%d %s",
-                crcDelta, noiseFloor, csSnr, linkQuality,
-                armed ? "ARMED" : "LEARN")).append("\n");
+                crcDelta, noiseFloor, csSnr, linkQuality, armed ? "ARMED" : "LEARN")).append("\n");
         row++;
 
-        // External RF alert
         if (externalRF) {
             hud.append(String.format("** EXT RF: iCRC=%d thr=%d cnt=%d/%d **\n",
                     idleCRC, IDLE_CRC_THRESHOLD, externalRFcount, IDLE_CRC_CONFIRM));
             row++;
         }
 
-        // CRC burst alert
-        if (crcDelta > 200) {
-            hud.append("** RF BURST: CRC+").append(crcDelta).append(" **\n");
-            row++;
-        }
+        if (crcDelta > 200) { hud.append("** RF BURST: CRC+").append(crcDelta).append(" **\n"); row++; }
 
         hud.append("--------------------------------------\n");
         row++;
 
-        // AP list
         for (AP a : aps) {
-            if (row >= ROWS - 1) break;
+            if (row >= KindleUtils.ROWS - 1) break;
             if (a.threat == 0 && row > 20) break;
             History h = tracker.get(a.mac);
             char m1 = a.threat >= 60 ? '!' : (a.threat >= 30 ? '+' : ' ');
@@ -596,26 +421,22 @@ public class KindleDroneDetectorPro {
                     a.ssid.length() > 16 ? a.ssid.substring(0, 16) : a.ssid);
 
             if (a.flags.length() > 0) {
-                int space = COLS - ln.length() - 2;
+                int space = KindleUtils.COLS - ln.length() - 2;
                 if (space > 3) ln += " " + a.flags.substring(0, Math.min(a.flags.length(), space));
             }
-            if (ln.length() > COLS) ln = ln.substring(0, COLS);
+            if (ln.length() > KindleUtils.COLS) ln = ln.substring(0, KindleUtils.COLS);
             hud.append(ln).append("\n");
             row++;
         }
 
-        if (aps.size() > ROWS - 5) hud.append("...+").append(aps.size() - (ROWS - 5)).append(" more\n");
+        if (aps.size() > KindleUtils.ROWS - 5) hud.append("...+").append(aps.size() - (KindleUtils.ROWS - 5)).append(" more\n");
 
         String content = hud.toString();
         if (alert) {
-            try {
-                Runtime.getRuntime().exec(new String[]{"eips", "-f"}).waitFor();
-            } catch (Exception e) {
-            }
-            sleep(300);
+            KindleUtils.exec("eips", "-f");
+            KindleUtils.sleep(300);
         }
         writeEink(content);
-        lastRendered = content;
         lastRenderSignature = signature;
     }
 
@@ -648,18 +469,14 @@ public class KindleDroneDetectorPro {
     }
 
     static void writeEink(String text) {
-        try {
-            Runtime.getRuntime().exec(new String[]{"eips", "-c"}).waitFor();
-            sleep(50);
-            String[] lines = text.split("\n");
-            for (int y = 0; y < lines.length && y < ROWS; y++) {
-                String l = lines[y];
-                if (l.isEmpty()) continue;
-                if (l.length() > COLS) l = l.substring(0, COLS);
-                Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l}).waitFor();
-            }
-        } catch (Exception e) {
-            System.err.println("eips: " + e.getMessage());
+        KindleUtils.exec("eips", "-c");
+        KindleUtils.sleep(50);
+        String[] lines = text.split("\n");
+        for (int y = 0; y < lines.length && y < KindleUtils.ROWS; y++) {
+            String l = lines[y];
+            if (l.isEmpty()) continue;
+            if (l.length() > KindleUtils.COLS) l = l.substring(0, KindleUtils.COLS);
+            KindleUtils.exec("eips", "0", String.valueOf(y), l);
         }
     }
 
@@ -677,22 +494,6 @@ public class KindleDroneDetectorPro {
                         i, a.threat, a.mac, a.ssid, a.channel, a.signalDbm, a.dist,
                         h != null ? h.stddev : 0, h != null ? h.chChanges : 0, a.flags);
             }
-        }
-    }
-
-    // === Util ===
-    static void exec(String... cmd) {
-        try {
-            Runtime.getRuntime().exec(cmd).waitFor();
-        } catch (Exception e) {
-            System.err.println("exec: " + e.getMessage());
-        }
-    }
-
-    static void sleep(long ms) {
-        try {
-            Thread.sleep(ms);
-        } catch (Exception ignored) {
         }
     }
 }

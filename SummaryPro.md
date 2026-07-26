@@ -1,276 +1,267 @@
-# Kindle 4 Drone Detector — Project Summary
+# Kindle 4 Drone Detector — Summary
 
 ## Overview
 
 A Wi-Fi based drone detection system running on a jailbroken Amazon Kindle 4,
-using the built-in Atheros AR6003 chipset and e-ink display as a passive RF
-surveillance HUD.
+using the built-in Atheros AR6003 chipset and e-ink display as a passive RF surveillance HUD.
 
-**Hardware:** Kindle 4 (2011), 600×800 e-ink, ARM CPU, 256MB RAM  
-**Chipset:** Atheros AR6003 hw2.1.1, firmware 3.1.87.30  
-**Software:** Java 8 (compact JRE), BusyBox, wmiconfig, iwlist/iwconfig  
-**Display:** eips text mode — 50 columns × 40 rows
-
----
-
-## What It Detects
-
-| Detection Method | Points | Description |
-|-----------------|--------|-------------|
-| OUI Match | +50 | DJI, Parrot, Autel, Skydio, Yuneec, ESP32 MAC prefixes |
-| SSID Keyword | +40 | "dji", "mavic", "tello", "phantom", "fpv", etc. |
-| NEW + Strong | +25 | Device not in baseline, signal > -80 dBm |
-| Strong Unknown | +20 | Not baselined, signal > -65 dBm |
-| Moving (MOV) | +20 | Signal std deviation > 10 dB |
-| Channel Hopping | +20 | MAC seen on 2+ different channels |
-| Ad-Hoc Mode | +20 | Non-Master (peer-to-peer drone link) |
-| Hidden SSID | +15 | No SSID broadcast, within 80m |
-| Transient (TRN) | +15 | Appears/disappears, was once strong |
-| Random MAC (RMAC) | +10 | Locally-administered bit set |
-
-**Score interpretation:**
-- 0: Known, stable, normal router
-- 10-25: Minor curiosity (hidden AP, random MAC)
-- 30-59: Suspicious — worth watching
-- 60-79: Likely drone — visual alert triggered
-- 80-100: Confirmed drone signature
+| | |
+|---|---|
+| **Hardware** | Kindle 4 (2011), 600×800 e-ink, ARM CPU, 256 MB RAM |
+| **Chipset** | Atheros AR6003 hw2.1.1, firmware 3.1.87.30 |
+| **Software** | Java 8 (compact JRE), BusyBox, wmiconfig, iwlist/iwconfig |
+| **Display** | eips text mode — 50 columns × 40 rows |
 
 ---
 
-## Hardware Capabilities Discovered
+## Scoring System
 
-### AR6003 via `wmiconfig`
+Each detected AP is scored 0–100 across multiple factors. Scores stack.
 
-| Command | Use |
-|---------|-----|
-| `--power maxperf` | No power saving, fastest scanning |
-| `--scan --pas=200 --minact=30 --maxact=150` | 200ms passive dwell per channel |
-| `--scanctrlflags 1 1 1 1 1 1` | BSS reporting, active scan, auto scan |
-| `--getTargetStats` | CRC errors, noise floor, RSSI, SNR |
-| `--scanprobedssid <SSID>` | Directed probe for specific drone SSIDs |
-| `--startscan --scanlist <ch>` | Targeted channel scan (replaces cache!) |
-| `--getTargetStats --clearStats` | Reset counters for delta measurement |
+| Signal | Points | Condition |
+|---|---|---|
+| OUI match | +50 | MAC prefix matches DJI, Parrot, Autel, Skydio, Yuneec, or ESP32 |
+| SSID keyword | +40 | SSID contains "dji", "mavic", "tello", "phantom", "fpv", etc. |
+| NEW + strong | +25 | Not in baseline, signal > −80 dBm |
+| Strong unknown | +20 | Not in baseline, signal > −65 dBm |
+| Moving (MOV) | +20 | Signal standard deviation > 10 dB over history |
+| Channel hop (HOP) | +20 | MAC seen on 2+ channels across scans |
+| Ad-hoc mode (ADH) | +20 | Non-Master mode (peer-to-peer drone link) |
+| Hidden SSID (HID) | +15 | No SSID broadcast, within 80 m |
+| Transient (TRN) | +15 | Appeared/disappeared, peak signal was > −80 dBm |
+| Random MAC (RMAC) | +10 | Locally-administered bit set in first octet |
 
-### Key Stats from `--getTargetStats`
-rx_crcerr → CRC error count (RF interference indicator)
-noise_floor_calibation → Noise floor (baseline -96 dBm)
-cs_rssi → Current RSSI to associated AP
-cs_snr → Current SNR
-rx_errors → Total RX errors
+**Score thresholds:**
 
+| Range | Interpretation |
+|---|---|
+| 0 | Known, stable router |
+| 10–25 | Minor anomaly (hidden AP, random MAC) |
+| 30–59 | Suspicious — worth watching |
+| 60–79 | Likely drone — screen flash triggered |
+| 80–100 | Confirmed drone signature |
 
+---
 
+## Detection Layers
+
+```
+Layer 1 — WiFi AP scan (iwlist)
+  → OUI, SSID, channel, signal, hidden, mode
+
+Layer 2 — Temporal analysis (in-memory ring buffer)
+  → NEW, MOV, HOP, TRN, RMAC
+
+Layer 3 — Firmware stats (wmiconfig --getTargetStats)
+  → CRC delta during scanning (channel-switch noise indicator)
+
+Layer 4 — Idle CRC measurement (strongest non-WiFi detection)
+  → CRC errors during 2 s idle = external 2.4 GHz RF on home channel
+  → Catches: OcuSync, FPV video, drone telemetry
+  → Zero false positives in a clean RF environment
+
+Layer 5 — /proc/net/wireless (fast, every loop)
+  → Live noise floor, signal level, link quality
+```
 
 **CRC error rate interpretation:**
-- 30-100 per 5-second interval: Normal background
-- 200+: Significant RF burst (non-WiFi 2.4GHz activity)
-- 500+: Heavy interference (possible drone OcuSync/FPV nearby)
 
-### What Does NOT Work
-
-| Capability | Status |
-|-----------|--------|
-| Monitor mode | Not available (AR6003 limitation) |
-| Raw frame capture | Requires `processDot11Hdr=1` (untested, may break connectivity) |
-| `iwpriv wlan0` | "no private ioctls" |
-| `--getRSSI` | Not recognized by this firmware build |
-| `--getroamtable` | Returns empty |
-| `--sendframe` with 0 IE length | Syntax error |
+| Rate (per 5 s interval) | Meaning |
+|---|---|
+| 30–100 | Normal — caused by our own scanning |
+| 200+ | Significant RF burst (non-WiFi 2.4 GHz) |
+| 500+ | Heavy interference — likely drone OcuSync/FPV nearby |
 
 ---
 
 ## Architecture
-┌───────────────────────────────────────────────────┐
-│ KindleDroneDetectorPro v2.0 │
-├───────────────────────────────────────────────────┤
-│ │
-│ INIT: │
-│ wmiconfig: maxperf, 200ms dwell, BSS report │
-│ Clear stats baseline │
-│ │
-│ MAIN LOOP (every 5 seconds): │
-│ │
-│ ┌─ PRE-SCAN ─────────────────────────────┐ │
-│ │ Every 6th loop: --scanprobedssid │ │
-│ │ After probe: reset to "any" │ │
-│ └─────────────────────────────────────────┘ │
-│ │
-│ ┌─ SCAN ──────────────────────────────────┐ │
-│ │ iwlist wlan0 scan (full 13 channels) │ │
-│ │ Parse: MAC, SSID, channel, signal, enc │ │
-│ └─────────────────────────────────────────┘ │
-│ │
-│ ┌─ TEMPORAL ENGINE ───────────────────────┐ │
-│ │ Per-MAC history (40 observations) │ │
-│ │ Compute: stddev, channel changes, gaps │ │
-│ │ Flags: NEW, MOV, HOP, TRN │ │
-│ └─────────────────────────────────────────┘ │
-│ │
-│ ┌─ FIRMWARE STATS (every 5th loop) ───────┐ │
-│ │ wmiconfig --getTargetStats │ │
-│ │ Read: rx_crcerr, noise_floor, cs_snr │ │
-│ │ Compute: CRC delta (RF activity) │ │
-│ └─────────────────────────────────────────┘ │
-│ │
-│ ┌─ SCORING ───────────────────────────────┐ │
-│ │ OUI + SSID + Temporal + Signal + MAC │ │
-│ │ Sort by threat score descending │ │
-│ └─────────────────────────────────────────┘ │
-│ │
-│ ┌─ OUTPUT ────────────────────────────────┐ │
-│ │ E-ink display (eips) │ │
-│ │ Console log (stdout) │ │
-│ │ File log (/mnt/us/drone_log.txt) │ │
-│ │ Flash alert if score >= 60 │ │
-│ └─────────────────────────────────────────┘ │
-│ │
-└───────────────────────────────────────────────────┘
 
+```
+┌─────────────────────────────────────────────────────┐
+│              KindleDroneDetectorPro v2.1             │
+├─────────────────────────────────────────────────────┤
+│                                                     │
+│  INIT:                                              │
+│    wmiconfig: maxperf, 200 ms dwell, BSS report     │
+│    Clear stats baseline                             │
+│                                                     │
+│  MAIN LOOP (every 5 seconds)                        │
+│                                                     │
+│  ┌─ PRE-SCAN ──────────────────────────────────┐   │
+│  │  Every 6th loop: --scanprobedssid <SSID>    │   │
+│  │  Otherwise: reset probe to "any"            │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  ┌─ SCAN ──────────────────────────────────────┐   │
+│  │  iwlist wlan0 scan (full 13 channels)       │   │
+│  │  Parse: MAC, SSID, channel, signal, enc     │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  ┌─ TEMPORAL ENGINE ───────────────────────────┐   │
+│  │  Per-MAC ring buffer (40 observations)      │   │
+│  │  Compute: stddev, channel changes, gaps     │   │
+│  │  Flags: NEW, MOV, HOP, TRN                  │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  ┌─ FIRMWARE STATS (every 5th loop) ───────────┐   │
+│  │  wmiconfig --getTargetStats                 │   │
+│  │  Read: rx_crcerr, noise_floor, cs_snr       │   │
+│  │  Compute: CRC delta (RF activity)           │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  ┌─ IDLE CRC (every 10th loop) ────────────────┐   │
+│  │  Clear stats → 2 s idle → read CRC          │   │
+│  │  Non-zero = external RF on home channel     │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  ┌─ SCORING ───────────────────────────────────┐   │
+│  │  OUI + SSID + Temporal + Signal + MAC       │   │
+│  │  Sort by threat score descending            │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+│  ┌─ OUTPUT ────────────────────────────────────┐   │
+│  │  E-ink display (eips, diff-based redraw)    │   │
+│  │  Console log (stdout)                       │   │
+│  │  File log (/mnt/us/drone_log.txt)           │   │
+│  │  Screen flash if score ≥ 60 or external RF  │   │
+│  └─────────────────────────────────────────────┘   │
+│                                                     │
+└─────────────────────────────────────────────────────┘
+```
 
+---
 
+## E-Ink Display
+
+### Screen layout
+
+```
+DRONE 02:48:34 AP:30 THR:2 #45
+CRC+52 NF:-96 SNR:33 LQ:42 ARMED
+--------------------------------------
+!~* 7m  -53dB C6  DJI_MAVIC_3      DJI NEW STR
++   43m -74dB C3  [HIDDEN]         HID RMAC
+    65m -79dB C9  HomeNetwork
+    71m -80dB C6  Buffonn
+```
+
+### Symbol reference
+
+| Symbol / Field | Meaning |
+|---|---|
+| `!` | Threat ≥ 60 (likely drone) |
+| `+` | Threat ≥ 30 (suspicious) |
+| `~` | Moving — signal variance > 10 dB |
+| `*` | New device, not in baseline |
+| `ARMED` | Baseline complete, alerting active |
+| `LEARN` | Still building baseline (first 30 loops) |
+| `CRC+N` | CRC errors since last stats check |
+| `NF` | Noise floor in dBm |
+| `SNR` | Signal-to-noise ratio |
+| `LQ` | Link quality from /proc/net/wireless |
+| `** RF BURST **` | CRC delta > 200 (non-WiFi 2.4 GHz detected) |
+| `** EXT RF **` | Idle CRC confirms external RF on home channel |
 
 ---
 
 ## Detection Performance
 
-### Tested Environment (residential, ~50 APs in range)
+Tested in a residential environment with ~50 APs in range.
 
 | Metric | Value |
-|--------|-------|
-| APs detected per scan | 25-50 |
-| Scan cycle time | ~5 seconds |
-| False MOV alerts | 0 (threshold 10.0) |
-| False NEW alerts | 0 (requires signal > -80) |
-| Background threat scores | 0-25 |
-| Expected drone score | 60-100 |
-| Score separation (benign vs drone) | 35-75 points |
+|---|---|
+| APs detected per scan | 25–50 |
+| Scan cycle time | ~5 s |
+| False MOV alerts | 0 (stddev threshold 10.0) |
+| False NEW alerts | 0 (requires signal > −80 dBm) |
+| Background threat scores | 0–25 |
+| Expected drone score | 60–100 |
+| Score gap (benign vs. drone) | 35–75 points |
 
-### What a Real Drone Looks Like
-!! 95 60:60:1F:A3:B7:22 MAVIC-3-xxxx C6 -52dB 7m DJI NEW STR
+### Example output
 
+Drone (score 95):
+```
+!! 95  60:60:1F:A3:B7:22  MAVIC-3-xxxx  C6  -52dB  7m   DJI NEW STR
+```
 
-
-
-vs. background:
-25 52:4F:3B:2F:A3:02 [HIDDEN] C8 -84dB 100m HID RMAC
-15 2C:8A:F1:40:86:AE [HIDDEN] C6 -74dB 43m HID
-0 48:A9:8A:C1:B8:10 LM2 C12 -56dB 9m
-
-
-
+Background noise:
+```
+   25  52:4F:3B:2F:A3:02  [HIDDEN]      C8  -84dB  100m  HID RMAC
+   15  2C:8A:F1:40:86:AE  [HIDDEN]      C6  -74dB   43m  HID
+    0  48:A9:8A:C1:B8:10  LM2           C12 -56dB    9m
+```
 
 ---
 
-## File Structure
+## On-Device File Structure
+
+```
 /mnt/us/
-├── KindleDroneDetectorPro.jar # Main detector
-├── drone_log.txt # Persistent detection log
-├── java/jre/bin/java # Java 8 runtime
-└── iptables_backup.conf # Firewall backup
+├── KindleDroneDetectorPro.jar    # main detector JAR
+├── drone_log.txt                 # persistent detection log
+├── java/jre/bin/java             # Java 8 runtime
+└── iptables_backup.conf          # firewall backup
+```
 
+View the log:
 
-
-
----
-
-## Usage
-
-### Start Detector
 ```bash
-cd /mnt/us
-java/jre/bin/java -jar KindleDroneDetectorPro.jar
-Prerequisites (one-time setup)
-bash
-
-
-# Open firewall (if not already done)
-iptables -F && iptables -P INPUT ACCEPT
-
-# Verify wmiconfig works
-wmiconfig -i wlan0 --version
-View Log
-bash
-
-
 cat /mnt/us/drone_log.txt
 tail -20 /mnt/us/drone_log.txt
-E-Ink Display Legend
+```
 
+---
 
-DRONE 02:48:34 AP:30 THR:0 #45
-CRC+52 NF:-96 SNR:33 ARMED
---------------------------------------
-!~* 7m  -53dB C12 DJI_MAVIC_3     DJI NEW STR
-+   43m -74dB C3  [HIDDEN]        HID RMAC
-    65m -79dB C9  setka
-    71m -80dB C6  Buffonn
-Symbol	Meaning
-!	Threat ≥ 60 (likely drone)
-+	Threat ≥ 30 (suspicious)
-~	Moving (signal variance > 10 dB)
-*	New device (not in baseline)
-ARMED	Learning complete, alerting active
-LEARN	Still building baseline
-CRC+N	CRC errors since last check
-NF	Noise floor (dBm)
-** RF BURST **	CRC > 200 (non-WiFi RF detected)
-Tuning History
-Parameter	v1	v2 (final)	Reason
-MOV threshold	4.0	10.0	Stationary routers have sd 4-8
-NEW signal requirement	any	> -80 dBm	Edge-of-range APs are noise
-HID distance limit	120m	80m	Distant hidden = dual-SSID router
-TRN requirement	gaps ≥ 2	gaps ≥ 2 AND peakSignal > -80	Filter edge-of-range flicker
-Baseline period	15 loops	30 loops	Capture more of environment
-Scan interval	4s	5s	Reduce system load
-CRC alert threshold	50	200	50-100 is normal
-Stats calls	2 per interval	1 per interval	Was calling getTargetStats twice
-Probe frequency	every 5 loops	every 6 loops	Less firmware flooding
-E-ink redraw	every loop	only on change	Reduce wear and exec calls
-Limitations
-2.4 GHz only — Cannot detect 5.8 GHz drone links
-AP beacons only — Cannot see raw frames without monitor mode
-No OcuSync decode — DJI O3/O4 uses proprietary protocol (detected via CRC spikes only)
-Scan latency — 5-second cycle means fast-moving drones may be seen in only 1-2 scans
-Distance estimation — Based on free-space path loss model, ±50% accuracy indoors
-MAC randomization — Newer DJI firmware may use random MACs (detected via RMAC flag)
-Future Enhancements (Not Implemented)
-processDot11Hdr=1 — Enable raw 802.11 headers for probe request sniffing
-Per-channel CRC tracking via active sweep + stats reset
-Integration with external SDR via TCP for 5.8 GHz coverage
-Remote ID (Broadcast) packet parsing if available
-Multiple Kindle mesh for triangulation
-undefined
+## Tuning History
 
-| `processDot11Hdr=1` | Writable at runtime BUT instantly kills WiFi |
-|                     | Parameter resets to 0 on reboot                |
-|                     | Incompatible with active network association    |
+Parameters changed between v1 and v2 to eliminate false positives.
 
-What's New in v2.1
-Feature	Implementation
-Maxperf re-apply	Every 30 loops (~2.5 min), re-sends --power maxperf since Kindle resets it
-/proc/net/wireless polling	Every loop — reads noise/signal/linkQuality without spawning wmiconfig
-Idle CRC measurement	Every 10 loops: clears stats → 2s idle → reads CRC. Non-zero = external RF!
-External RF alert	Requires 2 consecutive detections (idleCRC > 3) to flag. Decays when clear.
-Display: ** EXTERNAL RF **	Shown on e-ink when idle-CRC detects non-WiFi 2.4GHz activity
-Log: iCRC field	Idle CRC value logged every loop for post-analysis
-Header: LQ field	Link quality from /proc/net/wireless
-Flash on external RF	E-ink full refresh triggered by externalRF flag too
-Detection Layers (Complete)
+| Parameter | v1 | v2 | Reason |
+|---|---|---|---|
+| MOV stddev threshold | 4.0 | 10.0 | Stationary routers have stddev 4–8 |
+| NEW signal minimum | any | > −80 dBm | Edge-of-range APs are noise |
+| HID distance limit | 120 m | 80 m | Distant hidden = dual-SSID router |
+| TRN condition | gaps ≥ 2 | gaps ≥ 2 AND peak > −80 dBm | Filter edge-of-range flicker |
+| Baseline period | 15 loops | 30 loops | Capture more of the environment |
+| Scan interval | 4 s | 5 s | Reduce system load |
+| CRC alert threshold | 50 | 200 | 50–100 is normal scan noise |
+| Stats calls per interval | 2 | 1 | Was calling getTargetStats twice |
+| Probe frequency | every 5 loops | every 6 loops | Less firmware flooding |
+| E-ink redraw | every loop | on content change only | Reduce wear and exec overhead |
 
+---
 
-Layer 1: WiFi AP Scan (iwlist)
-  → OUI, SSID, channel, signal, hidden, mode
+## What's New in v2.1
 
-Layer 2: Temporal Analysis (in-memory)
-  → NEW, MOV, HOP, TRN, RMAC
+| Feature | Implementation |
+|---|---|
+| Maxperf re-apply | Every 30 loops (~2.5 min) — Kindle daemon resets it to "rec" |
+| /proc/net/wireless polling | Every loop — reads noise/signal/LQ without spawning wmiconfig |
+| Idle CRC measurement | Every 10 loops: clear → 2 s idle → read CRC; non-zero = external RF |
+| External RF alert | Requires 3 consecutive detections; decays when clear |
+| `** EXT RF **` display line | Shown on e-ink with idle CRC count and threshold |
+| `iCRC` log field | Idle CRC value logged every loop for post-analysis |
+| `LQ` header field | Link quality from /proc/net/wireless |
+| Screen flash on external RF | Full e-ink refresh triggered by externalRF flag |
 
-Layer 3: Firmware Stats (wmiconfig --getTargetStats)
-  → CRC delta during scanning (channel-switch noise)
+---
 
-Layer 4: Idle CRC (NEW — strongest non-WiFi detection)
-  → CRC during 2s idle = external 2.4GHz RF on home channel
-  → Catches: OcuSync, FPV video, drone telemetry
-  → Zero false positives in clean RF environment
+## Limitations
 
-Layer 5: /proc/net/wireless (fast)
-  → Live noise floor, signal, link quality
+- **2.4 GHz only** — cannot detect 5.8 GHz drone links (DJI O3/O4, FPV video)
+- **AP beacons only** — no raw frame capture without monitor mode
+- **No OcuSync decode** — DJI O3/O4 proprietary protocol; detected only via CRC spikes
+- **Scan latency** — 5 s cycle; fast-moving drone may appear in only 1–2 scans
+- **Distance accuracy** — free-space path loss model, ±50% indoors
+- **MAC randomization** — newer DJI firmware may use random MACs (flagged as RMAC)
+
+---
+
+## Future Enhancements
+
+- `processDot11Hdr=1` — raw 802.11 headers for probe request sniffing *(kills WiFi, see Chipset.md)*
+- Per-channel CRC tracking via active sweep + stats reset
+- External SDR integration via TCP for 5.8 GHz coverage
+- Remote ID broadcast packet parsing
+- Multi-Kindle mesh for triangulation

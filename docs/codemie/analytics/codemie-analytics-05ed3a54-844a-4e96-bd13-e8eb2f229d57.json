@@ -1,0 +1,188 @@
+{
+  "meta": {
+    "generatedAt": "2026-07-26T07:50:30.113Z",
+    "rangeLabel": "all",
+    "agents": [
+      "claude"
+    ],
+    "projectFilter": "all",
+    "totals": {
+      "sessions": 1,
+      "durationMs": 48009,
+      "turns": 5,
+      "files": 16,
+      "netLines": 0,
+      "toolCallsTotal": 17,
+      "toolSuccessRate": 100,
+      "totalCostUSD": 0.9122958000000001,
+      "cacheReadCostUSD": 0.0719958,
+      "pricedSessions": 1
+    },
+    "unpricedModels": [],
+    "coverage": [
+      {
+        "agentName": "claude",
+        "total": 1,
+        "priced": 1,
+        "withLog": 1
+      }
+    ],
+    "periodStart": "2026-07-26T07:47:01.827Z"
+  },
+  "sessions": [
+    {
+      "sessionId": "05ed3a54-844a-4e96-bd13-e8eb2f229d57",
+      "agentName": "claude",
+      "provider": "ai-run-sso",
+      "title": "Explore the project at C:\\Users\\Maksym_Yepaneshnikov\\spring\\drone. Give me a thorough overview of: 1. Directory structure (all major directories and files) 2. Main source files and their purpose 3. Any existing utility/common/shared code 4. Technology stack (languages, frameworks, build tools) 5. Any patterns I should follow when adding new code Search breadth: very thorough",
+      "project": "C:\\Users\\Maksym_Yepaneshnikov\\spring\\drone",
+      "branch": "master",
+      "startTime": 1785052021827,
+      "durationMs": 48009,
+      "turns": 5,
+      "fileOps": 16,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "linesModified": 0,
+      "netLines": 0,
+      "filesChanged": 0,
+      "filesWritten": 0,
+      "filesEdited": 0,
+      "toolCallsTotal": 17,
+      "toolCallsSuccess": 17,
+      "toolCallsFailure": 0,
+      "models": [
+        "claude-sonnet-4-6"
+      ],
+      "languages": [
+        "markdown",
+        "java"
+      ],
+      "tools": [
+        {
+          "toolName": "Read",
+          "totalCalls": 15,
+          "successCount": 15,
+          "failureCount": 0,
+          "successRate": 100
+        },
+        {
+          "toolName": "Bash",
+          "totalCalls": 1,
+          "successCount": 1,
+          "failureCount": 0,
+          "successRate": 100
+        },
+        {
+          "toolName": "Glob",
+          "totalCalls": 1,
+          "successCount": 1,
+          "failureCount": 0,
+          "successRate": 100
+        }
+      ],
+      "tokens": {
+        "input": 2354,
+        "output": 5684,
+        "cacheRead": 239986,
+        "cacheCreation": 124663,
+        "cacheCreation1h": 124663,
+        "total": 372687
+      },
+      "costUSD": 0.9122958000000001,
+      "cacheReadCostUSD": 0.0719958,
+      "perModelCost": [
+        {
+          "model": "claude-sonnet-4-6",
+          "tokens": {
+            "input": 2354,
+            "output": 5684,
+            "cacheRead": 239986,
+            "cacheCreation": 124663,
+            "cacheCreation1h": 124663,
+            "total": 372687
+          },
+          "costUSD": 0.9122958000000001,
+          "unpriced": false
+        }
+      ],
+      "costSeries": [
+        {
+          "t": 1785052029464,
+          "cost": 0.244833,
+          "tokens": 40399
+        },
+        {
+          "t": 1785052032769,
+          "cost": 0.393039,
+          "tokens": 64773
+        },
+        {
+          "t": 1785052051929,
+          "cost": 0.4483626,
+          "tokens": 97742
+        },
+        {
+          "t": 1785052058346,
+          "cost": 0.5110599,
+          "tokens": 136148
+        },
+        {
+          "t": 1785052064000,
+          "cost": 0.6852912,
+          "tokens": 200636
+        },
+        {
+          "t": 1785052124972,
+          "cost": 0.7588239,
+          "tokens": 269104
+        },
+        {
+          "t": 1785052135863,
+          "cost": 0.8003091,
+          "tokens": 313127
+        },
+        {
+          "t": 1785052139616,
+          "cost": 0.9122958,
+          "tokens": 372687
+        }
+      ],
+      "dispatches": [
+        {
+          "kind": "agent",
+          "name": "Explore",
+          "start": 1785052029464,
+          "durationMs": 97293,
+          "costUSD": 0.5139909,
+          "tokens": {
+            "input": 2349,
+            "output": 4548,
+            "cacheRead": 156513,
+            "cacheCreation": 65295,
+            "cacheCreation1h": 65295,
+            "total": 228705
+          },
+          "tools": [
+            {
+              "name": "Read",
+              "calls": 15
+            },
+            {
+              "name": "Bash",
+              "calls": 1
+            },
+            {
+              "name": "Glob",
+              "calls": 1
+            }
+          ]
+        }
+      ],
+      "skillInvocations": [],
+      "agentInvocations": [],
+      "commandInvocations": [],
+      "sessionSource": "Pure chat"
+    }
+  ]
+}
