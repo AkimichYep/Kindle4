@@ -36,10 +36,12 @@ public class KindleDroneDetectorPro {
     static final long WEATHER_EVERY_MS   = 300_000L; // 5 min
     static final long ABSENT_GHOST_MS    = 600_000L; // 10 min — show known-threat as ghost on radar
     static final int  RADAR_SNAPSHOT_MAX = 3;        // keep only this many timestamped radar PNGs
-    static final int  HISTORY_EVERY_LOOPS = 36;      // show history page every ~3 min
+    static final int  HISTORY_EVERY_LOOPS = 36;      // kept for reference; trigger is now time-based
     static final int  HISTORY_SHOW_LOOPS  = 6;       // keep history page for ~30 s
-    static final int  ROAD_VIEW_EVERY_LOOPS = 18;    // show road-radar every ~90 s
+    static final int  ROAD_VIEW_EVERY_LOOPS = 18;    // kept for reference; trigger is now time-based
     static final int  ROAD_VIEW_SHOW_LOOPS  = 8;     // keep road-radar for ~40 s
+    static final long HISTORY_VIEW_INTERVAL_MS = 180_000L; // show history every ~3 min
+    static final long ROAD_VIEW_INTERVAL_MS    =  90_000L; // show road-radar every ~90 s
     static final int  RADAR_DIST_DELTA_NEAR_M = 4;   // <= 60m
     static final int  RADAR_DIST_DELTA_MID_M  = 6;   // 61..140m
     static final int  RADAR_DIST_DELTA_FAR_M  = 8;   // 141..240m
@@ -228,8 +230,10 @@ public class KindleDroneDetectorPro {
     // ── Display-mode tracking ─────────────────────────────────────────────────
     // Which page is currently on screen: "weather", "history", "radar", "hud"
     static String currentPage = "";
-    static int historyCountdown = 0;
-    static int roadCountdown = 0;
+    static int  historyCountdown = 0;
+    static int  roadCountdown    = 0;
+    static long lastHistoryViewAt = 0; // wall-time trigger for history page
+    static long lastRoadViewAt    = 0; // wall-time trigger for road page
 
     // ── Row-level display diff ────────────────────────────────────────────────
     // Kindle screen is ROWS×COLS; we cache what was last written to each row.
@@ -270,7 +274,12 @@ public class KindleDroneDetectorPro {
 
         // Fetch weather eagerly and display the weather page as the startup screen.
         weather = WeatherService.fetchWeather(WEATHER_LOCATION);
-        lastWeatherFetchAt = System.currentTimeMillis();
+        long startupNow = System.currentTimeMillis();
+        lastWeatherFetchAt = startupNow;
+        // Initialize page-rotation timestamps to now so road/history don't
+        // trigger immediately on loop#1 (lastXxxViewAt=0 would give elapsed≈forever).
+        lastRoadViewAt    = startupNow;
+        lastHistoryViewAt = startupNow;
         renderWeatherPage();
 
         while (true) {
@@ -360,14 +369,27 @@ public class KindleDroneDetectorPro {
                 activitySinceLastRadar = false;
             }
 
-            // Rotate to history page periodically when radar is not active.
-            if (radarCountdown == 0 && loop % HISTORY_EVERY_LOOPS == 0) {
-                historyCountdown = HISTORY_SHOW_LOOPS;
-            }
-
-            // Road-radar page for moving APs (distance + estimated speed).
-            if (radarCountdown == 0 && loop % ROAD_VIEW_EVERY_LOOPS == 0 && hasRoadMovement()) {
-                roadCountdown = ROAD_VIEW_SHOW_LOOPS;
+            // History and road pages use wall-time triggers so they fire in the
+            // gaps between radar cycles — loop-modulo triggers don't work because
+            // RADAR_EVERY (12) divides HISTORY_EVERY_LOOPS (36) and the road modulo
+            // never lands in a clear window (radarCountdown is always > 0 when
+            // loop % 18 == 0 or loop % 36 == 0).
+            if (radarCountdown == 0 && roadCountdown == 0 && historyCountdown == 0) {
+                long roadElapsed = t0 - lastRoadViewAt;
+                if (roadElapsed >= ROAD_VIEW_INTERVAL_MS) {
+                    roadCountdown  = ROAD_VIEW_SHOW_LOOPS;
+                    lastRoadViewAt = t0;
+                    logFile(String.format("ROAD trigger: loop#%d elapsed=%ds",
+                            loop, roadElapsed / 1000));
+                } else {
+                    long histElapsed = t0 - lastHistoryViewAt;
+                    if (histElapsed >= HISTORY_VIEW_INTERVAL_MS) {
+                        historyCountdown  = HISTORY_SHOW_LOOPS;
+                        lastHistoryViewAt = t0;
+                        logFile(String.format("HISTORY trigger: loop#%d elapsed=%ds",
+                                loop, histElapsed / 1000));
+                    }
+                }
             }
 
             // While radar is on screen: cycle through the last 3 saved frames
@@ -393,7 +415,10 @@ public class KindleDroneDetectorPro {
                 }
                 radarCountdown--;
                 if (radarCountdown == 0) {
-                    // Radar done — force weather page on next render cycle
+                    // Radar done — discard any frozen road/history countdowns so
+                    // weather gets screen time before the next interval fires.
+                    roadCountdown    = 0;
+                    historyCountdown = 0;
                     Arrays.fill(screenCache, "");
                     currentPage = ""; // force re-draw of weather page
                     KindleUtils.exec("eips", "-c");
@@ -1024,43 +1049,70 @@ public class KindleDroneDetectorPro {
         int row = 0;
         long now = System.currentTimeMillis();
 
-        sc[row++] = pad(String.format("* ROAD RADAR  %tT  loop#%d *", now, loop));
-        sc[row++] = pad(LINE_H);
-        sc[row++] = pad("AP           dist   dM  km/h dir age");
+        // Title bar matches weather-page style
+        String armedStr = armed ? "ARMED" : String.format("LEARN %d/%d", loop, BASELINE_LOOPS);
+        sc[row++] = pad(String.format("* ROAD RADAR  %tT  %-10s *", now, armedStr));
         sc[row++] = pad(LINE_H);
 
+        // Pre-build sorted record list and count movers
         List<NetRecord> recs = new ArrayList<>(knownNets.values());
-        recs.sort((a, b) -> Double.compare(Math.abs(speedKmh(b)), Math.abs(speedKmh(a))));
+        recs.sort((a, b) -> {
+            int da = Math.abs(a.lastDistDeltaM);
+            int db = Math.abs(b.lastDistDeltaM);
+            if (db != da) return db - da;
+            return Double.compare(Math.abs(speedKmh(b)), Math.abs(speedKmh(a)));
+        });
+
+        int totalActive = 0, totalMoving = 0;
+        for (NetRecord nr : recs) {
+            if (nr.distHistory.size() < 2) continue;
+            if (now - nr.lastSeen > 240_000L) continue;
+            totalActive++;
+            if (Math.abs(nr.lastDistDeltaM) > 2 || Math.abs(speedKmh(nr)) > 0.5) totalMoving++;
+        }
+        sc[row++] = pad(String.format("  Movers:%-2d  All:%-2d  NF:%ddBm  SNR:%d",
+                totalMoving, totalActive, noiseFloor, csSnr));
+        sc[row++] = pad(LINE_H);
+        // Column header aligned to data format: %c %-12s %4dm %4s %4.1f  %-4s %s
+        sc[row++] = pad(" AP           dist   dM  km/h  dir  trend");
+        sc[row++] = pad(LINE_H);
 
         int shown = 0;
         for (NetRecord nr : recs) {
             if (row >= KindleUtils.ROWS - 2) break;
-            if (nr.distHistory.size() < 3) continue;
+            if (nr.distHistory.size() < 2) continue;
 
             long ageMs = now - nr.lastSeen;
-            if (ageMs > 240_000L) continue; // keep view focused on recent roadside movement
+            if (ageMs > 240_000L) continue;
 
             double kmh = speedKmh(nr);
-            if (shown >= 14 && Math.abs(kmh) < 1.5) continue;
+            if (shown >= 14 && Math.abs(nr.lastDistDeltaM) < 2 && Math.abs(kmh) < 0.5) continue;
 
             String name = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : nr.mac;
             if (name.length() > 12) name = name.substring(0, 12);
 
             int dist = nr.lastDistM >= 0 ? nr.lastDistM : nr.distHistory.peekLast();
-            String dmTag = formatDistDeltaTag(nr.lastDistDeltaM).trim();
-            String dir = kmh > 0.8 ? "AWAY" : (kmh < -0.8 ? "NEAR" : "----");
-            String age = shortText(formatLastSeen(ageMs), 6);
+            String dmTag = formatDistDeltaTag(nr.lastDistDeltaM);
+            String dir = nr.lastDistDeltaM < -2 ? "NEAR"
+                       : nr.lastDistDeltaM >  2 ? "AWAY" : "----";
+            // < = approaching, > = receding, space = steady
+            char prefix = nr.lastDistDeltaM < -2 ? '<'
+                        : nr.lastDistDeltaM >  2 ? '>' : ' ';
+            String spark = shortText(MovementMetrics.sparkline(nr.distHistory), 6);
 
-            String ln = String.format("%-12s %4dm %4s %4.1f %-4s %s",
-                    name, dist, dmTag, Math.abs(kmh), dir, age);
-            sc[row++] = pad(ln);
+            sc[row++] = pad(String.format("%c%-12s %4dm %4s %4.1f  %-4s %s",
+                    prefix, name, dist, dmTag, Math.abs(kmh), dir, spark));
             shown++;
         }
 
-        if (shown == 0 && row < KindleUtils.ROWS - 1) {
-            sc[row++] = pad("no recent moving APs yet");
+        if (shown == 0 && row < KindleUtils.ROWS - 2) {
+            sc[row++] = pad("  no active APs in range");
         }
-        if (row < KindleUtils.ROWS) sc[KindleUtils.ROWS - 1] = pad("dir: NEAR=towards you  AWAY=from you");
+
+        // Fixed footer: separator + weather summary + legend
+        sc[KindleUtils.ROWS - 2] = pad(LINE_H);
+        sc[KindleUtils.ROWS - 1] = pad(WeatherService.weatherSummaryForHud(weather)
+                + "  <NEAR >AWAY");
 
         return sc;
     }
