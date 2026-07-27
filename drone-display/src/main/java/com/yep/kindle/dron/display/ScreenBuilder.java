@@ -50,29 +50,72 @@ public final class ScreenBuilder {
         sc[row++] = pad(String.format("* DRONE WATCH  %tT  %-10s *", now, armedStr));
         sc[row++] = pad(LINE_H);
 
-        // Weather block
+        // Weather block with enhanced formatting
         WeatherService.WeatherData wx = ctx.weather;
         if (wx == null || wx.error != null) {
             String errMsg = wx != null ? wx.error : "n/a";
-            if (errMsg != null && errMsg.length() > 34) errMsg = errMsg.substring(0, 34);
-            sc[row++] = pad("  WEATHER: " + ctx.weatherLocation + "  [OFFLINE]");
-            sc[row++] = pad("  ERR: " + errMsg);
+            if (errMsg != null && errMsg.length() > 32) errMsg = errMsg.substring(0, 32);
+            sc[row++] = pad("");
+            sc[row++] = pad("  [!] WEATHER SERVICE OFFLINE");
+            sc[row++] = pad("  Location: " + ctx.weatherLocation);
+            sc[row++] = pad("  Error: " + errMsg);
+            sc[row++] = pad("");
         } else {
             String icon = weatherIcon(nz(wx.description));
             String city = nz(wx.city);
-            if (city.length() > 12) city = city.substring(0, 12);
+            if (city.length() > 14) city = city.substring(0, 14);
+            String country = nz(wx.country);
+            if (country.length() > 10) country = country.substring(0, 10);
             String desc = nz(wx.description);
-            if (desc.length() > 20) desc = desc.substring(0, 20);
-            sc[row++] = pad(String.format("  %s %-20s  %s", icon, desc, city));
-            sc[row++] = pad(String.format("  Temp:%sC  Feels:%sC  Hum:%s%%",
-                    nz(wx.temp), nz(wx.feelsLike), nz(wx.humidity)));
-            sc[row++] = pad(String.format("  Wind:%-3s %3skm/h  Pres:%4shPa",
-                    nz(wx.windDir), nz(wx.windSpeed), nz(wx.pressure)));
+            if (desc.length() > 18) desc = desc.substring(0, 18);
+
+            // Location line with icon
+            sc[row++] = pad(String.format("  %s  %s, %s", icon, city, country));
+
+            // Description line
+            sc[row++] = pad(String.format("     %s", desc));
+
+            // Parse temps
+            int temp = 0;
+            int feels = 0;
+            try {
+                temp = Integer.parseInt(nz(wx.temp).replaceAll("[^-0-9]", ""));
+                feels = Integer.parseInt(nz(wx.feelsLike).replaceAll("[^-0-9]", ""));
+            } catch (Exception ignored) {}
+
+            // Temperature line
+            String tempLine = String.format("  Temp: %d C", temp);
+            if (feels != temp) {
+                tempLine += String.format("  |  Feels: %d C", feels);
+            }
+            sc[row++] = pad(tempLine);
+
+            // Humidity and Pressure
+            String humidity = nz(wx.humidity);
+            String pressure = nz(wx.pressure);
+            sc[row++] = pad(String.format("  Humidity: %3s%%  |  Press: %4s hPa", humidity, pressure));
+
+            // Wind information
+            String windDir = nz(wx.windDir);
+            String windSpeed = nz(wx.windSpeed);
+            String windLine;
+            if (windSpeed.equals("0") || windSpeed.equals("--")) {
+                windLine = "  Wind: Calm";
+            } else {
+                windLine = String.format("  Wind: %s km/h %s", windSpeed, windDir);
+            }
+            sc[row++] = pad(windLine);
+
+            // Update timestamp with quality indicator
             long ageSec = (now - wx.updatedAt) / 1000L;
-            String ageStr = ageSec < 60 ? ageSec + "s ago"
-                          : ageSec < 3600 ? (ageSec / 60) + "m ago"
-                          : (ageSec / 3600) + "h ago";
-            sc[row++] = pad("  upd: " + ageStr);
+            String freshness = ageSec < 300 ? "[FRESH]" : ageSec < 1800 ? "[OK]" : "[STALE]";
+            String ageStr;
+            if (ageSec < 60) ageStr = "just now";
+            else if (ageSec < 3600) ageStr = (ageSec / 60) + "m";
+            else if (ageSec < 86400) ageStr = (ageSec / 3600) + "h";
+            else ageStr = (ageSec / 86400) + "d";
+            sc[row++] = pad(String.format("  Updated: %s ago %s", ageStr, freshness));
+            sc[row++] = pad("");
         }
 
         sc[row++] = pad(LINE_H);
@@ -422,20 +465,19 @@ public final class ScreenBuilder {
         return days + " d ago";
     }
 
-    /** Map a weather description to a 4-character ASCII icon. */
+    /** Map weather description to a compact weather icon. */
     public static String weatherIcon(String desc) {
-        if (desc == null || desc.equals("--")) return "[??]";
+        if (desc == null || desc.equals("--")) return "[?]";
         String d = desc.toLowerCase();
-        if (d.contains("thunder") || d.contains("storm"))                   return "[!!]";
-        if (d.contains("blizzard") || d.contains("sleet"))                  return "[**]";
-        if (d.contains("snow") || d.contains("flurr"))                      return "[**]";
-        if (d.contains("drizzle"))                                           return "[.~]";
-        if (d.contains("rain") || d.contains("shower"))                     return "[~~]";
-        if (d.contains("fog") || d.contains("mist") || d.contains("haze")) return "[..]";
-        if (d.contains("overcast"))                                          return "[CC]";
-        if (d.contains("cloud"))                                             return "[Cc]";
-        if (d.contains("clear") || d.contains("sunny") || d.contains("sun")) return "[<>]";
-        return "[ -]";
+        if (d.contains("thunder") || d.contains("storm"))      return "[!]";
+        if (d.contains("blizzard"))                             return "[#]";
+        if (d.contains("sleet") || d.contains("snow"))         return "[*]";
+        if (d.contains("drizzle") || d.contains("rain"))       return "[~]";
+        if (d.contains("shower"))                               return "[:]";
+        if (d.contains("fog") || d.contains("mist"))           return "[=]";
+        if (d.contains("overcast") || d.contains("cloud"))     return "[o]";
+        if (d.contains("clear") || d.contains("sunny"))        return "[.]";
+        return "[?]";
     }
 
     private static void fillEmpty(String[] sc) {

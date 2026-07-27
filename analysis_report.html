@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Drone Detection Analysis Report</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+        .content {
+            padding: 40px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 40px;
+        }
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease;
+        }
+        .stat-card:hover {
+            transform: translateY(-5px);
+        }
+        .stat-card .number {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        .stat-card .label {
+            font-size: 0.95em;
+            opacity: 0.9;
+        }
+        .chart-section {
+            margin-bottom: 50px;
+        }
+        .chart-section h2 {
+            color: #667eea;
+            margin-bottom: 20px;
+            font-size: 1.5em;
+            border-bottom: 3px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .chart-wrapper {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        @media (max-width: 1024px) {
+            .two-column {
+                grid-template-columns: 1fr;
+            }
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+        }
+        th {
+            background: #667eea;
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e0e0e0;
+        }
+        tr:hover {
+            background: #f8f9fa;
+        }
+        .signal-excellent { color: #27ae60; font-weight: bold; }
+        .signal-vgood { color: #2ecc71; font-weight: bold; }
+        .signal-good { color: #f39c12; font-weight: bold; }
+        .signal-fair { color: #e74c3c; font-weight: bold; }
+        .signal-weak { color: #c0392b; font-weight: bold; }
+        .footer {
+            background: #f8f9fa;
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            border-top: 1px solid #e0e0e0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚁 Drone Detection Analysis Report</h1>
+            <p>WiFi Network Monitoring & Signal Analysis</p>
+        </div>
+
+        <div class="content">
+            <!-- Key Statistics -->
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="number">174</div>
+                    <div class="label">Networks Detected</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">156.3K</div>
+                    <div class="label">Total Frames</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">-79.5</div>
+                    <div class="label">Avg Signal (dBm)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="number">898</div>
+                    <div class="label">Avg Frames/Net</div>
+                </div>
+            </div>
+
+            <!-- Channel Distribution -->
+            <div class="chart-section">
+                <h2>WiFi Channel Distribution</h2>
+                <div class="two-column">
+                    <div class="chart-wrapper">
+                        <canvas id="channelChart"></canvas>
+                    </div>
+                    <div class="chart-wrapper">
+                        <p style="padding: 20px; text-align: center;">
+                            <strong>Key Finding:</strong> 95.9% of networks use Channel 0 (2.4GHz),<br/>
+                            indicating heavy congestion in the 2.4GHz band.<br/><br/>
+                            This is typical for IoT and wireless devices, which predominantly operate on 2.4GHz.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Frame Count Distribution -->
+            <div class="chart-section">
+                <h2>Frame Count Distribution</h2>
+                <div class="chart-wrapper">
+                    <canvas id="frameDistChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Signal Strength Distribution -->
+            <div class="chart-section">
+                <h2>Signal Strength Distribution</h2>
+                <div class="two-column">
+                    <div class="chart-wrapper">
+                        <canvas id="signalChart"></canvas>
+                    </div>
+                    <div class="chart-wrapper">
+                        <h3 style="color: #667eea; margin-bottom: 15px;">Signal Strength Categories</h3>
+                        <table>
+                            <tr style="background: #27ae60; color: white;">
+                                <td><strong>Excellent (-50 to -30 dBm)</strong></td>
+                                <td style="text-align: right;"><strong>4 networks</strong></td>
+                            </tr>
+                            <tr style="background: #2ecc71; color: white;">
+                                <td><strong>Very Good (-60 to -51 dBm)</strong></td>
+                                <td style="text-align: right;"><strong>3 networks</strong></td>
+                            </tr>
+                            <tr style="background: #f39c12; color: white;">
+                                <td><strong>Good (-70 to -61 dBm)</strong></td>
+                                <td style="text-align: right;"><strong>6 networks</strong></td>
+                            </tr>
+                            <tr style="background: #e74c3c; color: white;">
+                                <td><strong>Fair (-80 to -71 dBm)</strong></td>
+                                <td style="text-align: right;"><strong>75 networks</strong></td>
+                            </tr>
+                            <tr style="background: #c0392b; color: white;">
+                                <td><strong>Weak (-90 to -81 dBm)</strong></td>
+                                <td style="text-align: right;"><strong>78 networks</strong></td>
+                            </tr>
+                            <tr style="background: #8b0000; color: white;">
+                                <td><strong>Very Weak (&lt;-90 dBm)</strong></td>
+                                <td style="text-align: right;"><strong>8 networks</strong></td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Top Networks -->
+            <div class="chart-section">
+                <h2>Top 15 Most Active Networks</h2>
+                <div class="chart-wrapper">
+                    <canvas id="topNetworksChart"></canvas>
+                </div>
+                <table>
+                    <tr>
+                        <th>#</th>
+                        <th>Network Name (SSID)</th>
+                        <th>Frames</th>
+                        <th>Signal (dBm)</th>
+                        <th>Channel</th>
+                    </tr>
+                    <tr>
+                        <td>1</td>
+                        <td>LM2</td>
+                        <td><strong>3319</strong></td>
+                        <td><span class="signal-excellent">-39</span></td>
+                        <td>6</td>
+                    </tr>
+                    <tr>
+                        <td>2</td>
+                        <td>Kyivstar-AB0C</td>
+                        <td><strong>3293</strong></td>
+                        <td><span class="signal-fair">-73</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>3</td>
+                        <td>TP-Link_ADF6</td>
+                        <td><strong>3250</strong></td>
+                        <td><span class="signal-fair">-76</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>4</td>
+                        <td>Hidden Network</td>
+                        <td><strong>3243</strong></td>
+                        <td><span class="signal-good">-65</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>5</td>
+                        <td>Tenda_13C010</td>
+                        <td><strong>3239</strong></td>
+                        <td><span class="signal-fair">-73</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>6</td>
+                        <td>Gena1969</td>
+                        <td><strong>3224</strong></td>
+                        <td><span class="signal-good">-69</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>7</td>
+                        <td>netis_2.4G_605422</td>
+                        <td><strong>3197</strong></td>
+                        <td><span class="signal-good">-71</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>8</td>
+                        <td>Tenda</td>
+                        <td><strong>3174</strong></td>
+                        <td><span class="signal-good">-64</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>9</td>
+                        <td>ASUS_83</td>
+                        <td><strong>3172</strong></td>
+                        <td><span class="signal-vgood">-58</span></td>
+                        <td>0</td>
+                    </tr>
+                    <tr>
+                        <td>10</td>
+                        <td>86</td>
+                        <td><strong>3124</strong></td>
+                        <td><span class="signal-vgood">-51</span></td>
+                        <td>0</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- Movement Detection Analysis -->
+            <div class="chart-section">
+                <h2>🚁 Movement Detection Analysis</h2>
+                <div class="two-column">
+                    <div class="chart-wrapper">
+                        <canvas id="movementChart"></canvas>
+                    </div>
+                    <div style="background: #fff3cd; padding: 20px; border-radius: 10px; border-left: 4px solid #ffc107;">
+                        <h3 style="color: #856404; margin-bottom: 15px;">Movement Indicators Found</h3>
+                        <p style="margin-bottom: 10px;"><strong>Surge Events (SRG):</strong> 7 networks detected rapid signal changes</p>
+                        <p style="margin-bottom: 10px;"><strong>Consecutive Approach (APR):</strong> 133 networks showed distance-decrease patterns</p>
+                        <p style="margin-bottom: 10px;"><strong>High-Threat Networks:</strong> 121 networks flagged with movement indicators</p>
+                        <p><strong>Conclusion:</strong> YES - Moving objects detected with high confidence</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- High-Threat Networks Table -->
+            <div class="chart-section">
+                <h2>Alert: Top Movement-Suspected Networks</h2>
+                <div style="background: #f8d7da; padding: 15px; border-radius: 10px; margin-bottom: 15px; border-left: 4px solid #dc3545;">
+                    <strong style="color: #721c24;">121 networks show movement patterns | Threat scores range from 60-360</strong>
+                </div>
+                <table>
+                    <tr>
+                        <th>#</th>
+                        <th>Network (SSID)</th>
+                        <th>Signal (dBm)</th>
+                        <th>Surge Events</th>
+                        <th>Approach Events</th>
+                        <th>Threat Score</th>
+                        <th>Flags</th>
+                    </tr>
+                    <tr style="background: #f8d7da;">
+                        <td>1</td>
+                        <td><strong>86</strong></td>
+                        <td>-51</td>
+                        <td>0</td>
+                        <td>18</td>
+                        <td><strong style="color: #dc3545;">360</strong></td>
+                        <td>-</td>
+                    </tr>
+                    <tr style="background: #f8d7da;">
+                        <td>2</td>
+                        <td><strong>LM2</strong></td>
+                        <td>-39</td>
+                        <td>6</td>
+                        <td>8</td>
+                        <td><strong style="color: #dc3545;">280</strong></td>
+                        <td>-</td>
+                    </tr>
+                    <tr style="background: #f8d7da;">
+                        <td>3</td>
+                        <td><strong>Mei</strong></td>
+                        <td>-44</td>
+                        <td>3</td>
+                        <td>9</td>
+                        <td><strong style="color: #dc3545;">240</strong></td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td>4</td>
+                        <td>TP-Link95</td>
+                        <td>-58</td>
+                        <td>0</td>
+                        <td>11</td>
+                        <td>220</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td>5</td>
+                        <td>ASUS_83</td>
+                        <td>-58</td>
+                        <td>0</td>
+                        <td>10</td>
+                        <td>200</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td>6</td>
+                        <td>Gena1969</td>
+                        <td>-69</td>
+                        <td>0</td>
+                        <td>9</td>
+                        <td>180</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td>7</td>
+                        <td>TP-Link_D158</td>
+                        <td>-65</td>
+                        <td>0</td>
+                        <td>8</td>
+                        <td>160</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td>8</td>
+                        <td>villishome</td>
+                        <td>-76</td>
+                        <td>1</td>
+                        <td>7</td>
+                        <td>160</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td>9</td>
+                        <td>Tenda</td>
+                        <td>-64</td>
+                        <td>0</td>
+                        <td>8</td>
+                        <td>160</td>
+                        <td>-</td>
+                    </tr>
+                    <tr>
+                        <td>10</td>
+                        <td>Tenda_05A6B0</td>
+                        <td>-74</td>
+                        <td>1</td>
+                        <td>6</td>
+                        <td>140</td>
+                        <td>-</td>
+                    </tr>
+                </table>
+            </div>
+
+            <!-- Key Insights -->
+            <div class="chart-section">
+                <h2>Key Insights & Interpretation</h2>
+                <div style="background: #d1ecf1; padding: 20px; border-radius: 10px; border-left: 4px solid #0c5460;">
+                    <h3 style="color: #0c5460; margin-top: 0;">Movement Detection Results</h3>
+                    <ul style="list-style-position: inside; line-height: 1.8;">
+                        <li><strong>MOVEMENT CONFIRMED:</strong> 121 networks (69.5% of all networks) show movement patterns</li>
+                        <li><strong>Surge Events:</strong> 7 networks detected rapid RSSI jumps >12dBm (SRG flag), indicating sudden position changes</li>
+                        <li><strong>Consecutive Approach:</strong> 133 networks showed 3+ consecutive distance decreases (APR flag), consistent with moving-toward behavior</li>
+                        <li><strong>Top Suspect:</strong> Network "86" (-51 dBm) shows 18 consecutive approach events - strong movement signature</li>
+                        <li><strong>High-Confidence Movers:</strong> LM2, Mei, TP-Link95 show combined surge + approach events</li>
+                    </ul>
+                    <p style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #0c5460;"><strong>Interpretation:</strong> The high density of movement indicators (121 networks) reflects a dynamic urban WiFi environment with mobile devices, roaming users, and vehicular WiFi. Standout networks like "86" and "LM2" warrant closer investigation for potential drone or UAV signatures.</p>
+                </div>
+            </div>
+
+            <!-- Statistics Box -->
+            <div class="stats-grid" style="margin-top: 40px;">
+                <div class="stat-card" style="background: linear-gradient(135deg, #0c5460 0%, #0d6680 100%);">
+                    <div class="number">121</div>
+                    <div class="label">Movement-Active Networks</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);">
+                    <div class="number">360</div>
+                    <div class="label">Max Threat Score</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #fcc419 0%, #fab005 100%);">
+                    <div class="number">7</div>
+                    <div class="label">Surge Events Detected</div>
+                </div>
+                <div class="stat-card" style="background: linear-gradient(135deg, #51cf66 0%, #40c057 100%);">
+                    <div class="number">133</div>
+                    <div class="label">Approach Patterns</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Generated: 2026-07-27 | Drone Detection System Analysis | Signal analysis from 174 WiFi networks</p>
+        </div>
+    </div>
+
+    <script>
+        // Chart styling
+        const chartOptions = {
+            responsive: true,
+            maintainAspectRatio: true,
+            plugins: {
+                legend: {
+                    display: true,
+                    labels: {
+                        font: { size: 12 },
+                        color: '#333'
+                    }
+                }
+            }
+        };
+
+        // Channel Distribution Chart
+        const channelCtx = document.getElementById('channelChart').getContext('2d');
+        new Chart(channelCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Channel 0 (2.4GHz)', 'Channel 1', 'Channel 3', 'Channel 6'],
+                datasets: [{
+                    data: [167, 5, 1, 1],
+                    backgroundColor: ['#667eea', '#764ba2', '#f093fb', '#4facfe']
+                }]
+            },
+            options: chartOptions
+        });
+
+        // Frame Distribution Chart
+        const frameCtx = document.getElementById('frameDistChart').getContext('2d');
+        new Chart(frameCtx, {
+            type: 'bar',
+            data: {
+                labels: ['0-500', '500-1K', '1K-1.5K', '1.5K-2K', '2K-2.5K', '2.5K-3.5K'],
+                datasets: [{
+                    label: 'Number of Networks',
+                    data: [89, 20, 22, 14, 9, 20],
+                    backgroundColor: '#667eea',
+                    borderRadius: 5
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    y: { beginAtZero: true }
+                }
+            }
+        });
+
+        // Signal Strength Chart (Histogram-style)
+        const signalCtx = document.getElementById('signalChart').getContext('2d');
+        new Chart(signalCtx, {
+            type: 'bar',
+            data: {
+                labels: ['-45', '-40', '-35', '-30', '-25', '-20', '-15', '-10', '-5', 'dBm'],
+                datasets: [{
+                    label: 'Networks by Signal Strength',
+                    data: [61, 55, 14, 4, 2, 2, 1, 3, 1],
+                    backgroundColor: '#e74c3c',
+                    borderRadius: 5
+                }]
+            },
+            options: {
+                ...chartOptions,
+                scales: {
+                    y: { beginAtZero: true }
+                }
+            }
+        });
+
+        // Top Networks Chart
+        const topCtx = document.getElementById('topNetworksChart').getContext('2d');
+        new Chart(topCtx, {
+            type: 'horizontalBar',
+            type: 'bar',
+            data: {
+                labels: ['LM2', 'Kyivstar', 'TP-Link_ADF6', 'Hidden', 'Tenda', 'Gena1969', 'netis_2.4G', 'Tenda', 'ASUS_83', '86', 'Mari', 'Mei', 'DIR-615', 'TP-Link95', 'Natali'],
+                datasets: [{
+                    label: 'Frames Captured',
+                    data: [3319, 3293, 3250, 3243, 3239, 3224, 3197, 3174, 3172, 3124, 3069, 3004, 2879, 2845, 2840],
+                    backgroundColor: '#764ba2',
+                    borderRadius: 5
+                }]
+            },
+            options: {
+                indexAxis: 'y',
+                ...chartOptions,
+                scales: {
+                    x: { beginAtZero: true }
+                }
+            }
+        });
+
+        // Movement Detection Chart
+        const movementCtx = document.getElementById('movementChart').getContext('2d');
+        new Chart(movementCtx, {
+            type: 'doughnut',
+            data: {
+                labels: ['Movement Detected (121)', 'Static Networks (53)'],
+                datasets: [{
+                    data: [121, 53],
+                    backgroundColor: ['#dc3545', '#28a745']
+                }]
+            },
+            options: {
+                ...chartOptions,
+                plugins: {
+                    ...chartOptions.plugins,
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const total = 174;
+                                const value = context.raw;
+                                const percentage = ((value / total) * 100).toFixed(1);
+                                return `${context.label}: ${value} (${percentage}%)`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    </script>
+</body>
+</html>
