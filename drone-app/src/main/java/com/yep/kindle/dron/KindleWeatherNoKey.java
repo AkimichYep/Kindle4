@@ -32,7 +32,6 @@ public class KindleWeatherNoKey {
     private static final DateTimeFormatter API_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
     private static final DateTimeFormatter API_TIME_LABEL = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter DATE_LABEL = DateTimeFormatter.ofPattern("MM-dd");
-    private static final DateTimeFormatter DAY_LABEL = DateTimeFormatter.ofPattern("EEEE", Locale.ENGLISH);
     private static Font weatherIconBaseFont;
 
     public static void main(String[] args) {
@@ -123,7 +122,8 @@ public class KindleWeatherNoKey {
 
         // Header block
         int headerTop = 34;
-        drawWeatherIcon(g2d, snapshot.currentCode, 34, headerTop + 4, 120, 100);
+        boolean currentDay = isDaytime(snapshot.currentTime, snapshot.sunriseTime, snapshot.sunsetTime);
+        drawWeatherIcon(g2d, snapshot.currentCode, currentDay, 34, headerTop + 4, 120, 100);
         g2d.setFont(new Font("SansSerif", Font.BOLD, 42));
         g2d.drawString(shortCondition(snapshot.currentCode), 172, 74);
         g2d.setFont(new Font("SansSerif", Font.PLAIN, 48));
@@ -155,7 +155,8 @@ public class KindleWeatherNoKey {
             }
             g2d.setFont(new Font("SansSerif", Font.PLAIN, 30));
             g2d.drawString(slot.timeLabel, x + 38, slotY + 26);
-            drawWeatherIcon(g2d, slot.weatherCode, x + 24, slotY + 36, 92, 74);
+            boolean slotDay = isDaytime(slot.slotTime, snapshot.sunriseTime, snapshot.sunsetTime);
+            drawWeatherIcon(g2d, slot.weatherCode, slotDay, x + 24, slotY + 36, 92, 74);
             g2d.setFont(new Font("SansSerif", Font.BOLD, 44));
             g2d.drawString(formatTemp(slot.temperature), x + 28, slotY + 180);
             g2d.setFont(new Font("SansSerif", Font.PLAIN, 20));
@@ -165,8 +166,19 @@ public class KindleWeatherNoKey {
         // Footer details
         g2d.setStroke(new BasicStroke(2));
         g2d.drawLine(20, 748, WIDTH - 20, 748);
-        g2d.setFont(new Font("SansSerif", Font.PLAIN, 24));
-        g2d.drawString("Sunrise " + snapshot.sunrise + "  Sunset " + snapshot.sunset, 172, 782);
+        Font iconBase = getWeatherIconBaseFont();
+        if (iconBase != null) {
+            Font footerIconFont = iconBase.deriveFont(Font.PLAIN, 24f);
+            g2d.setFont(footerIconFont);
+            g2d.drawString(new String(Character.toChars(0xF051)), 28, 782);
+            g2d.drawString(new String(Character.toChars(0xF052)), 286, 782);
+            g2d.setFont(new Font("SansSerif", Font.PLAIN, 24));
+            g2d.drawString(snapshot.sunrise, 58, 782);
+            g2d.drawString(snapshot.sunset, 316, 782);
+        } else {
+            g2d.setFont(new Font("SansSerif", Font.PLAIN, 24));
+            g2d.drawString("Sunrise " + snapshot.sunrise + "  Sunset " + snapshot.sunset, 172, 782);
+        }
 
         g2d.dispose();
         return image;
@@ -197,9 +209,12 @@ public class KindleWeatherNoKey {
             if (hasHourlyTimes) {
                 idx = Math.min(start + (i * 3), hourlyTimes.length - 1);
                 slot.timeLabel = formatSlotLabel(hourlyTimes, idx);
+                slot.slotTime = parseLabelTime(slot.timeLabel);
             } else {
                 // Keep UI deterministic even if API omits hourly times.
-                slot.timeLabel = currentDateTime.plusHours((i + 1) * 3L).toLocalTime().format(API_TIME_LABEL);
+                LocalTime fallbackTime = currentDateTime.plusHours((i + 1) * 3L).toLocalTime();
+                slot.timeLabel = fallbackTime.format(API_TIME_LABEL);
+                slot.slotTime = fallbackTime;
             }
 
             slot.temperature = idx >= 0 && idx < hourlyTemps.length ? hourlyTemps[idx] : snapshot.currentTemp;
@@ -212,13 +227,15 @@ public class KindleWeatherNoKey {
         String[] sunsets = parseStringArray(dailySection, "sunset");
         snapshot.sunrise = formatTimeOnly(sunrises.length > 0 ? sunrises[0] : "--:--");
         snapshot.sunset = formatTimeOnly(sunsets.length > 0 ? sunsets[0] : "--:--");
+        snapshot.sunriseTime = parseLabelTime(snapshot.sunrise);
+        snapshot.sunsetTime = parseLabelTime(snapshot.sunset);
         return snapshot;
     }
 
-    private static void drawWeatherIcon(Graphics2D g2d, int code, int x, int y, int w, int h) {
+    private static void drawWeatherIcon(Graphics2D g2d, int code, boolean isDaytime, int x, int y, int w, int h) {
         Font iconBase = getWeatherIconBaseFont();
         if (iconBase != null) {
-            String glyph = weatherIconGlyph(code);
+            String glyph = weatherIconGlyph(code, isDaytime);
             float fontSize = Math.max(32f, Math.min(w, h) * 0.9f);
             Font iconFont = iconBase.deriveFont(Font.PLAIN, fontSize);
             g2d.setFont(iconFont);
@@ -269,47 +286,59 @@ public class KindleWeatherNoKey {
         }
     }
 
-    private static String weatherIconGlyph(int code) {
+    private static String weatherIconGlyph(int code, boolean isDaytime) {
         int codePoint;
         switch (code) {
             case 0:
-                codePoint = 0xF00D; // wi-day-sunny
+                codePoint = isDaytime ? 0xF00D : 0xF02E;
                 break;
             case 1:
             case 2:
             case 3:
-                codePoint = 0xF002; // wi-day-cloudy
+                codePoint = isDaytime ? 0xF002 : 0xF031;
                 break;
             case 45:
             case 48:
-                codePoint = 0xF014; // wi-fog
+                codePoint = isDaytime ? 0xF003 : 0xF04A;
                 break;
             case 51:
             case 53:
             case 55:
-                codePoint = 0xF01A; // wi-showers
+                codePoint = isDaytime ? 0xF00B : 0xF02B;
+                break;
+            case 56:
+            case 57:
+                codePoint = isDaytime ? 0xF0B2 : 0xF0B4;
                 break;
             case 61:
             case 63:
             case 65:
-            case 80:
-            case 81:
-            case 82:
-                codePoint = 0xF019; // wi-rain
+                codePoint = isDaytime ? 0xF008 : 0xF028;
+                break;
+            case 66:
+            case 67:
+                codePoint = isDaytime ? 0xF006 : 0xF026;
                 break;
             case 71:
             case 73:
             case 75:
             case 77:
-                codePoint = 0xF01B; // wi-snow
+            case 85:
+            case 86:
+                codePoint = isDaytime ? 0xF00A : 0xF02A;
+                break;
+            case 80:
+            case 81:
+            case 82:
+                codePoint = isDaytime ? 0xF009 : 0xF029;
                 break;
             case 95:
             case 96:
             case 99:
-                codePoint = 0xF01E; // wi-thunderstorm
+                codePoint = isDaytime ? 0xF010 : 0xF02D;
                 break;
             default:
-                codePoint = 0xF013; // wi-cloudy
+                codePoint = isDaytime ? 0xF002 : 0xF031;
                 break;
         }
         return new String(Character.toChars(codePoint));
@@ -602,6 +631,24 @@ public class KindleWeatherNoKey {
         }
     }
 
+    private static LocalTime parseLabelTime(String value) {
+        try {
+            return LocalTime.parse(value, API_TIME_LABEL);
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isDaytime(LocalTime time, LocalTime sunrise, LocalTime sunset) {
+        if (time == null || sunrise == null || sunset == null) {
+            return true;
+        }
+        if (sunrise.isBefore(sunset)) {
+            return !time.isBefore(sunrise) && time.isBefore(sunset);
+        }
+        return !time.isBefore(sunrise) || time.isBefore(sunset);
+    }
+
     private static class WeatherSnapshot {
         private double currentTemp;
         private int currentCode;
@@ -610,11 +657,14 @@ public class KindleWeatherNoKey {
         private final List<HourSlot> slots = new ArrayList<HourSlot>();
         private String sunrise = "--:--";
         private String sunset = "--:--";
+        private LocalTime sunriseTime;
+        private LocalTime sunsetTime;
     }
 
     private static class HourSlot {
         private String timeLabel = "--:--";
         private double temperature;
         private int weatherCode;
+        private LocalTime slotTime;
     }
 }
