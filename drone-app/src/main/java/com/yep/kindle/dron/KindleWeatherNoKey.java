@@ -49,20 +49,21 @@ public class KindleWeatherNoKey {
 
     public static void main(String[] args) {
         try {
-            System.out.println("Fetching weather for Kharkiv from Open-Meteo (No API key required)...");
-            String weatherJson = fetchWeatherData();
-            WeatherSnapshot snapshot = parseWeatherSnapshot(weatherJson);
-
-            System.out.println("Rendering e-ink layout...");
-            BufferedImage img = generateEInkImage(snapshot);
-
-            File output = new File("kharkiv-weather.png");
-            ImageIO.write(img, "png", output);
-            System.out.println("Successfully generated image: " + output.getAbsolutePath());
-
+            generateAndSave("kharkiv-weather.png");
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Fetch weather, render image, and save to the given path.
+     * Called by KindleDroneDetectorPro for in-process image generation.
+     */
+    public static void generateAndSave(String outputPath) throws Exception {
+        String weatherJson = fetchWeatherData();
+        WeatherSnapshot snapshot = parseWeatherSnapshot(weatherJson);
+        BufferedImage img = generateEInkImage(snapshot);
+        ImageIO.write(img, "png", new File(outputPath));
     }
 
     // -------------------------------------------------------------------------

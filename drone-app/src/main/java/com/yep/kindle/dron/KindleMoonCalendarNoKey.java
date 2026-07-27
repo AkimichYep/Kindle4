@@ -54,19 +54,21 @@ public class KindleMoonCalendarNoKey {
 
     public static void main(String[] args) {
         try {
-            System.out.println("Fetching moon calendar for Kharkiv from Open-Meteo...");
-            String json = fetchMoonData();
-            MoonCalendar calendar = parseMoonCalendar(json);
-
-            System.out.println("Rendering moon calendar...");
-            BufferedImage image = renderMoonCalendar(calendar);
-
-            File output = new File("kharkiv-moon-calendar.png");
-            ImageIO.write(image, "png", output);
-            System.out.println("Successfully generated image: " + output.getAbsolutePath());
+            generateAndSave("kharkiv-moon-calendar.png");
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Fetch moon data, render image, and save to the given path.
+     * Called by KindleDroneDetectorPro for in-process image generation.
+     */
+    public static void generateAndSave(String outputPath) throws Exception {
+        String json = fetchMoonData();
+        MoonCalendar calendar = parseMoonCalendar(json);
+        BufferedImage image = renderMoonCalendar(calendar);
+        ImageIO.write(image, "png", new File(outputPath));
     }
 
     // -------------------------------------------------------------------------

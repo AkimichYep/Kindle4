@@ -1,13 +1,11 @@
 package com.yep.kindle.dron.display;
 
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
 import com.yep.kindle.dron.detection.MovementMetrics;
-import com.yep.kindle.dron.model.AP;
 import com.yep.kindle.dron.model.DetectorContext;
 import com.yep.kindle.dron.model.History;
 import com.yep.kindle.dron.model.NetRecord;
@@ -17,10 +15,9 @@ import com.yep.kindle.dron.util.KindleUtils;
 /**
  * ScreenBuilder — assembles 40×50 character grids for each display page.
  *
- * Responsible for: weather page, history page, road-radar page, and the
- * legacy HUD screen (buildScreen).  All methods are pure in the sense that
- * they take their data as parameters and return a String[] without touching
- * the display hardware.
+ * Responsible for: weather page and history page.  All methods are pure in
+ * the sense that they take their data as parameters and return a String[]
+ * without touching the display hardware.
  */
 public final class ScreenBuilder {
 
@@ -163,7 +160,7 @@ public final class ScreenBuilder {
 
         if (row < KindleUtils.ROWS - 1) {
             sc[KindleUtils.ROWS - 1] = pad(String.format(
-                    "loop#%d  radar:activity  history:~3min", ctx.loop));
+                    "loop#%d  scan:3min  radar:5min  info:5min", ctx.loop));
         }
         return sc;
     }
@@ -223,188 +220,8 @@ public final class ScreenBuilder {
     }
 
     // =========================================================================
-    // Road-radar page
+    // Movement helpers
     // =========================================================================
-
-    /**
-     * Build the movement-centric road-radar page (distance + speed estimates).
-     */
-    public static String[] buildRoadRadarScreen(DetectorContext ctx) {
-        String[] sc = new String[KindleUtils.ROWS];
-        fillEmpty(sc);
-        int row = 0;
-        long now = System.currentTimeMillis();
-
-        String armedStr = ctx.armed
-                ? "ARMED"
-                : String.format("LEARN %d/%d", ctx.loop, ctx.baselineLoops);
-        sc[row++] = pad(String.format("* ROAD RADAR  %tT  %-10s *", now, armedStr));
-        sc[row++] = pad(LINE_H);
-
-        List<NetRecord> recs = new ArrayList<>(ctx.knownNets.values());
-        recs.sort((a, b) -> {
-            int da = Math.abs(a.lastDistDeltaM);
-            int db = Math.abs(b.lastDistDeltaM);
-            if (db != da) return db - da;
-            return Double.compare(Math.abs(speedKmh(b)), Math.abs(speedKmh(a)));
-        });
-
-        int totalActive = 0, totalMoving = 0;
-        for (NetRecord nr : recs) {
-            if (nr.distHistory.size() < 2) continue;
-            if (now - nr.lastSeen > 240_000L) continue;
-            totalActive++;
-            if (Math.abs(nr.lastDistDeltaM) > 2 || Math.abs(speedKmh(nr)) > 0.5) totalMoving++;
-        }
-        sc[row++] = pad(String.format("  Movers:%-2d  All:%-2d  NF:%ddBm  SNR:%d",
-                totalMoving, totalActive, ctx.noiseFloor, ctx.csSnr));
-        sc[row++] = pad(LINE_H);
-        sc[row++] = pad(" AP           dist   dM  km/h  dir  trend");
-        sc[row++] = pad(LINE_H);
-
-        int shown = 0;
-        for (NetRecord nr : recs) {
-            if (row >= KindleUtils.ROWS - 2) break;
-            if (nr.distHistory.size() < 2) continue;
-            if (now - nr.lastSeen > 240_000L) continue;
-
-            double kmh = speedKmh(nr);
-            if (shown >= 14 && Math.abs(nr.lastDistDeltaM) < 2 && Math.abs(kmh) < 0.5) continue;
-
-            String name = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : nr.mac;
-            if (name.length() > 12) name = name.substring(0, 12);
-
-            int    dist  = nr.lastDistM >= 0 ? nr.lastDistM : nr.distHistory.peekLast();
-            String dmTag = MovementMetrics.formatDistDeltaTag(nr.lastDistDeltaM);
-            String dir   = nr.lastDistDeltaM < -2 ? "NEAR"
-                         : nr.lastDistDeltaM >  2 ? "AWAY" : "----";
-            char prefix  = nr.lastDistDeltaM < -2 ? '<'
-                         : nr.lastDistDeltaM >  2 ? '>' : ' ';
-            String spark = shortText(MovementMetrics.sparkline(nr.distHistory), 6);
-
-            sc[row++] = pad(String.format("%c%-12s %4dm %4s %4.1f  %-4s %s",
-                    prefix, name, dist, dmTag, Math.abs(kmh), dir, spark));
-            shown++;
-        }
-
-        if (shown == 0 && row < KindleUtils.ROWS - 2) sc[row++] = pad("  no active APs in range");
-
-        sc[KindleUtils.ROWS - 2] = pad(LINE_H);
-        sc[KindleUtils.ROWS - 1] = pad(WeatherService.weatherSummaryForHud(ctx.weather)
-                + "  <NEAR >AWAY");
-        return sc;
-    }
-
-    // =========================================================================
-    // Legacy HUD screen
-    // =========================================================================
-
-    /**
-     * Build the simple AP-list HUD screen (used by the legacy render() path).
-     */
-    public static String[] buildScreen(List<AP> aps, DetectorContext ctx) {
-        String[] sc = new String[KindleUtils.ROWS];
-        fillEmpty(sc);
-        int row = 0;
-
-        boolean anythingNew = ctx.statNewArmed > 0 || ctx.statAlertEvents > 0
-                || ctx.scorer.hasInterestingActivity(aps, ctx.armed, ctx.baseline);
-
-        int thr = 0;
-        for (AP a : aps) if (a.threat >= 30) thr++;
-        sc[row++] = pad(String.format("DRONE %tT AP:%d THR:%d #%d",
-                System.currentTimeMillis(), aps.size(), thr, ctx.loop));
-
-        if (anythingNew) {
-            sc[row++] = pad(String.format("CRC+%d NF:%d SNR:%d LQ:%d %s",
-                    ctx.crcDelta, ctx.noiseFloor, ctx.csSnr, ctx.linkQuality,
-                    ctx.armed ? "ARMED" : String.format("LEARN %d/%d", ctx.loop, ctx.baselineLoops)));
-            long uptimeSec = (System.currentTimeMillis() - ctx.startTime) / 1000L;
-            sc[row++] = pad(String.format("UP:%s SC:%d MAC:%d NEW:%d PK:%d AL:%d",
-                    formatUptime(uptimeSec), ctx.statTotalScans,
-                    ctx.knownNets.size(), ctx.statNewArmed, ctx.statPeakThreat,
-                    ctx.statAlertEvents));
-            sc[row++] = pad(WeatherService.weatherSummaryForHud(ctx.weather));
-        } else {
-            sc[row++] = pad(WeatherService.weatherSummaryForHud(ctx.weather));
-        }
-
-        if (ctx.externalRF) {
-            sc[row++] = pad(String.format("** EXT RF: iCRC=%d thr=%d cnt=%d/%d **",
-                    ctx.idleCRC, ctx.idleCrcThreshold, ctx.externalRFcount, ctx.idleCrcConfirm));
-        }
-        if (ctx.crcDelta > 200) {
-            sc[row++] = pad("** RF BURST: CRC+" + ctx.crcDelta + " **");
-        }
-        sc[row++] = pad("--------------------------------------");
-
-        long now = System.currentTimeMillis();
-        for (AP a : aps) {
-            if (row >= KindleUtils.ROWS - 2) break;
-            if (a.threat == 0 && row > 20) break;
-            History h = ctx.temporal.get(a.mac);
-            char m1 = a.threat >= 60 ? '!' : (a.threat >= 30 ? '+' : ' ');
-            char m2 = (h != null && h.isMoving) ? '~' : ' ';
-            char m3 = (ctx.armed && !ctx.baseline.contains(a.mac) && h != null && h.isNew) ? '*' : ' ';
-
-            String dTag = MovementMetrics.formatDistDeltaTag(a.distDeltaM);
-            String ln = String.format("%c%c%c%3.0fm%s %3ddB C%-2d %-16s",
-                    m1, m2, m3, a.dist, dTag, a.signalDbm, a.channel,
-                    a.ssid.length() > 16 ? a.ssid.substring(0, 16) : a.ssid);
-
-            NetRecord nr = ctx.knownNets.get(a.mac);
-            if (nr != null && !nr.obsTime.isEmpty()) {
-                long agoMs = now - nr.lastSeen;
-                if (agoMs > 300_000L) {
-                    String lastSeen = " [" + formatLastSeen(agoMs) + "]";
-                    int space = KindleUtils.COLS - ln.length();
-                    if (space > lastSeen.length()) ln += lastSeen;
-                }
-            }
-            if (!a.flags.isEmpty()) {
-                int space = KindleUtils.COLS - ln.length() - 1;
-                if (space > 3) ln += " " + a.flags.substring(0, Math.min(a.flags.length(), space));
-            }
-            sc[row++] = pad(ln);
-        }
-
-        int visibleAPs = row - 5;
-        if (visibleAPs > 0 && aps.size() > visibleAPs) {
-            int hidden = aps.size() - visibleAPs;
-            if (row < KindleUtils.ROWS) sc[row++] = pad("...+" + hidden + " more");
-        }
-        return sc;
-    }
-
-    // =========================================================================
-    // Speed / movement helpers
-    // =========================================================================
-
-    /** Estimate speed in km/h from the distance history of a NetRecord. */
-    public static double speedKmh(NetRecord nr) {
-        if (nr == null || nr.distHistory == null || nr.distHistory.size() < 4) return 0.0;
-        List<Integer> hist = new ArrayList<>(nr.distHistory);
-        int n = hist.size();
-        int w = Math.max(1, n / 3);
-        double sumOld = 0, sumNew = 0;
-        for (int i = 0;     i < w; i++) sumOld += hist.get(i);
-        for (int i = n - w; i < n; i++) sumNew += hist.get(i);
-        double deltaM  = (sumNew - sumOld) / w;
-        // FAST_MS = 5000 ms per scan cycle
-        double seconds = (n - 1) * 5.0;
-        return (deltaM / seconds) * 3.6;
-    }
-
-    /** Returns true if any recent NetRecord shows speed >= 1 km/h. */
-    public static boolean hasRoadMovement(Collection<NetRecord> records) {
-        long now = System.currentTimeMillis();
-        for (NetRecord nr : records) {
-            if (nr.distHistory.size() < 3) continue;
-            if (now - nr.lastSeen > 240_000L) continue;
-            if (Math.abs(speedKmh(nr)) >= 1.0) return true;
-        }
-        return false;
-    }
 
     static int movementScore(NetRecord nr) {
         int score = Math.abs(nr.lastDistDeltaM) * 3;

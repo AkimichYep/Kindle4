@@ -1,9 +1,7 @@
 package com.yep.kindle.dron.display;
 
 import java.util.Arrays;
-import java.util.List;
 
-import com.yep.kindle.dron.model.AP;
 import com.yep.kindle.dron.model.DetectorContext;
 import com.yep.kindle.dron.util.KindleUtils;
 
@@ -48,44 +46,10 @@ public class DisplayManager {
         switchAndDiff("weather", sc);
     }
 
-    /** Render the distance-history page. */
+    /** Render the distance-history page (kept for fallback/debug). */
     public void showHistoryPage(DetectorContext ctx) {
         String[] sc = ScreenBuilder.buildHistoryScreen(ctx);
         switchAndDiff("history", sc);
-    }
-
-    /** Render the road-radar page. */
-    public void showRoadRadarPage(DetectorContext ctx) {
-        String[] sc = ScreenBuilder.buildRoadRadarScreen(ctx);
-        switchAndDiff("road", sc);
-    }
-
-    /**
-     * Legacy HUD render — full diff with optional alert flash.
-     */
-    public void render(List<AP> aps, boolean alert, DetectorContext ctx) {
-        String[] screen = ScreenBuilder.buildScreen(aps, ctx);
-
-        boolean anyChange = false;
-        for (int i = 0; i < KindleUtils.ROWS; i++) {
-            if (!screen[i].equals(screenCache[i])) { anyChange = true; break; }
-        }
-        if (!anyChange) return;
-
-        if (alert) {
-            KindleUtils.exec("eips", "-f");
-            KindleUtils.sleep(300);
-            KindleUtils.exec("eips", "-c");
-            KindleUtils.sleep(50);
-            for (int y = 0; y < KindleUtils.ROWS; y++) {
-                String l = screen[y];
-                if (!l.isEmpty()) KindleUtils.exec("eips", "0", String.valueOf(y), l);
-                screenCache[y] = l;
-            }
-            return;
-        }
-
-        applyDiff(screen);
     }
 
     // =========================================================================

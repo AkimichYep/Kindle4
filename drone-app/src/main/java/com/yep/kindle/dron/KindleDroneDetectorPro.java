@@ -2,9 +2,7 @@ package com.yep.kindle.dron;
 
 import java.io.*;
 import java.util.*;
-import java.util.function.Consumer;
 
-import com.yep.kindle.dron.detection.MovementMetrics;
 import com.yep.kindle.dron.detection.TemporalEngine;
 import com.yep.kindle.dron.detection.ThreatScorer;
 import com.yep.kindle.dron.display.DisplayManager;
@@ -20,49 +18,75 @@ import com.yep.kindle.dron.service.WifiScanner;
 import com.yep.kindle.dron.util.KindleUtils;
 
 /**
- * KindleDroneDetectorPro v2.3
+ * KindleDroneDetectorPro v2.5 — power-saving edition with fixed display rotation.
  *
- * Main entry point and orchestration loop for the Kindle drone detector.
- * All heavy logic has been extracted into dedicated classes:
+ * Display rotation (each slot = 5 min):
+ *   slot 0 — Weather PNG
+ *   slot 1 — Moon Calendar PNG
+ *   slot 2 — Space Weather PNG
+ *   slot 3 — Radar (shown for 30 s, then returns to slot 0)
  *
- *   WifiScanner      — hardware scanning, firmware management
- *   TemporalEngine   — per-MAC ring-buffer tracking across scans
- *   ThreatScorer     — multi-factor AP threat scoring
- *   ScreenBuilder    — assembles 40×50 text grids for each display page
- *   DisplayManager   — row-diff e-ink rendering
- *   RadarImageManager — radar PNG generation and snapshot lifecycle
- *   RadarRenderer    — low-level pixel renderer
- *   NetCsvStore      — CSV persistence
- *   WeatherService   — weather fetch / format
- *   MovementMetrics  — distance-delta utilities
- *   DroneSignatures  — OUI + keyword database
+ * Radar content:
+ *   First run (no CSV)  → show ALL scanned APs (explore mode)
+ *   Subsequent runs     → show only APs NOT in the loaded CSV baseline (new only)
+ *
+ * Wi-Fi scan: every 3 minutes, independent of display.
+ * Emergency blink: alternating white/black flashes when drone score >= 60.
  */
 public class KindleDroneDetectorPro {
 
-    // ── Timing constants ──────────────────────────────────────────────────────
-    static final int  FAST_MS            = 5000;
-    static final int  STATS_EVERY        = 5;
-    static final int  PROBE_EVERY        = 6;
-    static final int  IDLE_CRC_EVERY     = 10;
-    static final int  MAXPERF_EVERY      = 30;
-    static final int  SAVE_EVERY         = 12;    // persist CSV every ~60 s
-    static final int  RADAR_EVERY        = 12;    // regenerate radar image every ~60 s
-    static final int  RADAR_SHOW_LOOPS   = 10;    // display radar for this many loops (~50 s)
+    // ── Poll tick (outer loop sleep) ──────────────────────────────────────────
+    static final long TICK_MS           = 5_000L;   // 5 s idle tick
+
+    // ── Scan timing ───────────────────────────────────────────────────────────
+    /** Scan Wi-Fi every 3 min: 36 × 5 s = 180 s */
+    static final int  SCAN_EVERY        = 36;
+    static final int  STATS_EVERY       = 5;
+    static final int  PROBE_EVERY       = 6;
+    static final int  IDLE_CRC_EVERY    = 10;
+    static final int  MAXPERF_EVERY     = 36;
+    static final int  SAVE_EVERY        = 36;
+
+    // ── Display page timing ───────────────────────────────────────────────────
+    /**
+     * How long each info page stays on screen (ms).
+     * Sequence: Weather → Moon → Space → Radar, then repeat.
+     */
+    static final long PAGE_HOLD_MS      = 300_000L;  // 5 min per page
+    /** How long the radar image stays visible (ms). */
+    static final long RADAR_HOLD_MS     = 30_000L;   // 30 s
+
+    // Display page indices
+    static final int PAGE_WEATHER  = 0;
+    static final int PAGE_MOON     = 1;
+    static final int PAGE_SPACE    = 2;
+    static final int PAGE_RADAR    = 3;
+    static final int PAGE_COUNT    = 4;
+
+    static final String[] PAGE_FILES = {
+        "/mnt/us/weather.png",
+        "/mnt/us/moon.png",
+        "/mnt/us/spaceweather.png",
+        RadarRenderer.IMAGE_FILE          // /mnt/us/radar.png
+    };
+    static final String[] PAGE_NAMES = { "weather", "moon", "space", "radar" };
+
+    // ── Misc thresholds ───────────────────────────────────────────────────────
     static final int  IDLE_CRC_THRESHOLD = 6;
     static final int  IDLE_CRC_CONFIRM   = 3;
-    static final int  BASELINE_LOOPS     = 30;    // only used when no CSV
-    static final long WEATHER_EVERY_MS   = 300_000L; // 5 min
-    static final long ABSENT_GHOST_MS    = 600_000L; // 10 min
-    static final int  RADAR_SNAPSHOT_MAX = 3;
-    static final int  HISTORY_SHOW_LOOPS = 6;     // keep history page for ~30 s
-    static final int  ROAD_VIEW_SHOW_LOOPS = 8;   // keep road-radar for ~40 s
-    static final long HISTORY_VIEW_INTERVAL_MS = 180_000L; // show history every ~3 min
-    static final long ROAD_VIEW_INTERVAL_MS    =  90_000L; // show road-radar every ~90 s
+    static final int  BASELINE_LOOPS     = 10;
     static final int  RADAR_DIST_DELTA_NEAR_M  = 8;
     static final int  RADAR_DIST_DELTA_MID_M   = 15;
     static final int  RADAR_DIST_DELTA_FAR_M   = 25;
     static final int  RADAR_DIST_DELTA_VFAR_M  = 40;
     static final String WEATHER_LOCATION = "Kharkiv";
+
+    /** Weather data refresh interval. */
+    static final long WEATHER_EVERY_MS  = 300_000L;
+
+    // ── Emergency blink ───────────────────────────────────────────────────────
+    static final int  BLINK_COUNT      = 6;
+    static final int  BLINK_DELAY_MS   = 300;
 
     // ── File paths ────────────────────────────────────────────────────────────
     static final String LOG_FILE = "/mnt/us/drone_log.txt";
@@ -70,10 +94,10 @@ public class KindleDroneDetectorPro {
     static final String CSV_TMP  = "/mnt/us/drone_nets.csv.tmp";
 
     // ── Logging controls ──────────────────────────────────────────────────────
-    static final long LOG_MAX_BYTES   = 512 * 1024; // rotate at 512 KB (keep one .1 backup)
-    static final int  DUMP_THREAT_MIN = 30;         // full AP dump only when something is "suspicious"
-    static final int  HEARTBEAT_EVERY = 60;         // force a context dump every ~5 min
-    static final int  LOG_ROTATE_EVERY = 6;         // check log size every ~30 s
+    static final long LOG_MAX_BYTES    = 256 * 1024;
+    static final int  DUMP_THREAT_MIN  = 60;
+    static final int  HEARTBEAT_EVERY  = 120;
+    static final int  LOG_ROTATE_EVERY = 36;
 
     static final String[] PROBE_SSIDS = {
         "TELLO-", "DJI-", "Spark-", "PHANTOM", "Mavic-", "ANAFI-",
@@ -86,7 +110,7 @@ public class KindleDroneDetectorPro {
 
     public static void main(String[] args) {
         System.setProperty("java.awt.headless", "true");
-        System.out.println("=== KindleDroneDetectorPro v2.3 ===");
+        System.out.println("=== KindleDroneDetectorPro v2.5 ===");
 
         // ── Shared state ─────────────────────────────────────────────────────
         Map<String, NetRecord> knownNets = new LinkedHashMap<>();
@@ -100,7 +124,7 @@ public class KindleDroneDetectorPro {
                 temporal, scorer, knownNets, baseline);
         ctx.startTime = System.currentTimeMillis();
 
-        DisplayManager   display = new DisplayManager();
+        DisplayManager    display  = new DisplayManager();
         RadarImageManager radarMgr = new RadarImageManager(KindleDroneDetectorPro::logFile);
 
         // ── Startup ───────────────────────────────────────────────────────────
@@ -108,37 +132,40 @@ public class KindleDroneDetectorPro {
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             saveNetworksCsv(knownNets);
             KindleUtils.exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "0");
-            System.out.println("Sleep restored. CSV saved.");
+            System.out.println("Shutdown: CSV saved.");
         }));
 
         openLogFile();
-        int loaded = loadNetworksCsv(knownNets, baseline);
+        int loadedFromCsv = loadNetworksCsv(knownNets, baseline);
+        // firstRun = true means no prior CSV → radar will show all APs
+        boolean firstRun = (loadedFromCsv < 3);
 
-        if (loaded >= 3) {
+        if (!firstRun) {
             ctx.armed = true;
-            System.out.println("ARMED immediately: " + loaded + " nets from CSV");
-            logFile("ARMED from CSV: " + loaded + " known MACs");
+            logFile("ARMED CSV:" + loadedFromCsv);
         } else {
-            System.out.println("No CSV or too few entries (" + loaded + ") – entering learning phase");
+            System.out.println("No CSV – learning phase");
         }
 
         WifiScanner.initFirmware();
-        int[] statsResult = new int[3]; // [0]=crc, [1]=noiseFloor, [2]=csSnr
+        int[] statsResult = new int[3];
         long prevCRC = WifiScanner.readStats(statsResult, true);
         ctx.noiseFloor = statsResult[1];
         ctx.csSnr      = statsResult[2];
 
         ctx.weather = WeatherService.fetchWeather(WEATHER_LOCATION);
         long lastWeatherFetchAt = System.currentTimeMillis();
-        long lastHistoryViewAt  = lastWeatherFetchAt;
-        long lastRoadViewAt     = lastWeatherFetchAt;
-        display.showWeatherPage(ctx);
 
-        // ── Display-page tracking ─────────────────────────────────────────────
-        int  radarCountdown      = 0;
-        int  historyCountdown    = 0;
-        int  roadCountdown       = 0;
-        boolean activitySinceLastRadar = false;
+        // ── Display page state ────────────────────────────────────────────────
+        int  currentPage     = PAGE_WEATHER;
+        long pageShownAt     = System.currentTimeMillis();
+
+        // Generate and show the initial weather page
+        generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+        logFile("PAGE->weather");
+
+        // ── Scan / alert state ────────────────────────────────────────────────
+        boolean emergencyActive = false;
 
         // =========================================================================
         // Main loop
@@ -153,28 +180,74 @@ public class KindleDroneDetectorPro {
                 WifiScanner.reapplyMaxperf();
             }
 
-            // ── Directed probe ────────────────────────────────────────────────
-            boolean probeActive = false;
-            if (ctx.loop % PROBE_EVERY == 0) {
-                String probe = PROBE_SSIDS[(ctx.loop / PROBE_EVERY) % PROBE_SSIDS.length];
-                WifiScanner.sendProbe(probe);
-                probeActive = true;
-                logFile("PROBE: " + probe);
-            } else if (probeActive) {
-                WifiScanner.sendProbe("any");
-                probeActive = false;
-            }
+            // ── Wi-Fi scan (every 3 min) ───────────────────────────────────────
+            if (ctx.loop % SCAN_EVERY == 0 || ctx.loop == 1) {
+                if (ctx.loop % PROBE_EVERY == 0) {
+                    String probe = PROBE_SSIDS[(ctx.loop / PROBE_EVERY) % PROBE_SSIDS.length];
+                    WifiScanner.sendProbe(probe);
+                    logFile("PROBE:" + probe);
+                } else {
+                    WifiScanner.sendProbe("any");
+                }
 
-            // ── Scan + temporal engine ─────────────────────────────────────────
-            List<AP> aps = WifiScanner.scan();
-            temporal.update(aps, ctx.armed, baseline);
-            updateKnownNets(aps, ctx);
+                List<AP> aps = WifiScanner.scan();
+                temporal.update(aps, ctx.armed, baseline);
+                updateKnownNets(aps, ctx);
 
-            int[] procResult = WifiScanner.readProcWireless();
-            if (procResult != null) {
-                ctx.linkQuality = procResult[0];
-                ctx.noiseFloor  = procResult[2];
-                ctx.csSnr       = procResult[1] - procResult[2];
+                int[] procResult = WifiScanner.readProcWireless();
+                if (procResult != null) {
+                    ctx.linkQuality = procResult[0];
+                    ctx.noiseFloor  = procResult[2];
+                    ctx.csSnr       = procResult[1] - procResult[2];
+                }
+
+                scorer.score(aps, ctx.armed, baseline, knownNets);
+                aps.sort((a, b) -> b.threat != a.threat
+                        ? b.threat - a.threat : Double.compare(a.dist, b.dist));
+
+                int maxThreat = aps.isEmpty() ? 0 : aps.get(0).threat;
+                if (maxThreat > ctx.statPeakThreat) ctx.statPeakThreat = maxThreat;
+
+                // Learning-phase arming
+                if (!ctx.armed) {
+                    for (AP a : aps) {
+                        baseline.add(a.mac);
+                        NetRecord nr = knownNets.get(a.mac);
+                        if (nr == null) { nr = new NetRecord(a.mac); knownNets.put(a.mac, nr); }
+                        nr.update(a);
+                    }
+                    if (ctx.loop >= BASELINE_LOOPS) {
+                        ctx.armed = true;
+                        logFile("ARMED:" + baseline.size() + " MACs");
+                        saveNetworksCsv(knownNets);
+                        firstRun = false;
+                    }
+                }
+
+                // Emergency blink ONLY on confirmed drone score (externalRF alone is
+                // background RF noise — not enough for a drone alert).
+                boolean droneConfirmed = maxThreat >= 60;
+                if (droneConfirmed) {
+                    ctx.statAlertEvents++;
+                    if (!emergencyActive) {
+                        emergencyActive = true;
+                        logFile("!! DRONE CONFIRMED thr=" + maxThreat);
+                        emergencyBlink(display);
+                        // Redraw current page and reset the hold timer so the 5-min
+                        // countdown restarts from now (blink cleared the screen).
+                        pageShownAt = System.currentTimeMillis();
+                        generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+                    }
+                } else {
+                    emergencyActive = false;
+                }
+                // Log RF presence separately — informational only
+                if (ctx.externalRF) {
+                    logFile("RF active iCRC=" + ctx.idleCRC);
+                }
+
+                logLoopToFile(aps, maxThreat, ctx);
+                log(aps, ctx);
             }
 
             // ── Weather refresh ────────────────────────────────────────────────
@@ -183,19 +256,14 @@ public class KindleDroneDetectorPro {
                 lastWeatherFetchAt = now;
                 WeatherService.WeatherData latest = WeatherService.fetchWeather(WEATHER_LOCATION);
                 ctx.weather = latest;
-                if (latest.error == null) logFile("WEATHER ok: " + latest.temp + "C " + latest.description);
-                else                      logFile("WEATHER err: " + latest.error);
+                logFile(latest.error == null ? "WX:" + latest.temp + "C" : "WX ERR");
             }
 
             // ── Firmware stats ─────────────────────────────────────────────────
             if (ctx.loop % STATS_EVERY == 0) {
                 long newCRC = WifiScanner.readStats(statsResult, true);
-                ctx.crcDelta   = newCRC - prevCRC;
-                prevCRC        = newCRC;
-                // NF / SNR are sourced only from /proc/net/wireless (every loop, above)
-                // so they stay mutually consistent (SNR = level − NF from one source).
-                // The firmware cs_snr/noise_floor are a different measurement (SNR to the
-                // associated AP) and must not be mixed into the same fields.
+                ctx.crcDelta = newCRC - prevCRC;
+                prevCRC      = newCRC;
             }
 
             // ── Idle CRC ──────────────────────────────────────────────────────
@@ -204,10 +272,7 @@ public class KindleDroneDetectorPro {
                 if (ctx.idleCRC >= IDLE_CRC_THRESHOLD) {
                     ctx.externalRFcount++;
                     if (ctx.externalRFcount >= IDLE_CRC_CONFIRM) ctx.externalRF = true;
-                    String msg = "!! IDLE-CRC=" + ctx.idleCRC + " external RF (count="
-                            + ctx.externalRFcount + "/" + IDLE_CRC_CONFIRM + ")";
-                    System.out.println(msg);
-                    logFile(msg);
+                    logFile("RF iCRC=" + ctx.idleCRC + " cnt=" + ctx.externalRFcount);
                 } else {
                     if (ctx.externalRFcount > 0) ctx.externalRFcount--;
                     if (ctx.externalRFcount == 0) ctx.externalRF = false;
@@ -216,123 +281,201 @@ public class KindleDroneDetectorPro {
                 ctx.crcDelta = 0;
             }
 
-            // ── Score + sort ───────────────────────────────────────────────────
-            scorer.score(aps, ctx.armed, baseline, knownNets);
-            aps.sort((a, b) -> b.threat != a.threat
-                    ? b.threat - a.threat : Double.compare(a.dist, b.dist));
+            // ── Page rotation ─────────────────────────────────────────────────
+            // Advance to next page when the hold time has elapsed.
+            now = System.currentTimeMillis();
+            if (now - pageShownAt >= PAGE_HOLD_MS) {
+                currentPage = (currentPage + 1) % PAGE_COUNT;
+                pageShownAt = now;
+                generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+                logFile("PAGE->" + PAGE_NAMES[currentPage]);
 
-            int maxThreat = aps.isEmpty() ? 0 : aps.get(0).threat;
-            if (maxThreat > ctx.statPeakThreat) ctx.statPeakThreat = maxThreat;
-
-            // ── Learning-phase arming (fallback when no CSV) ───────────────────
-            if (!ctx.armed) {
-                for (AP a : aps) {
-                    baseline.add(a.mac);
-                    NetRecord nr = knownNets.get(a.mac);
-                    if (nr == null) { nr = new NetRecord(a.mac); knownNets.put(a.mac, nr); }
-                    nr.update(a);
-                }
-                if (ctx.loop == BASELINE_LOOPS) {
-                    ctx.armed = true;
-                    System.out.println("ARMED: " + baseline.size() + " MACs baselined");
-                    logFile("ARMED: " + baseline.size() + " MACs baselined");
-                    saveNetworksCsv(knownNets);
+                // After the radar slot finishes its 30-second hold, the screen is
+                // cleared inside showRadarPage().  Immediately advance to Weather so
+                // the display is never left blank for the remaining ~4:30 of the slot.
+                if (currentPage == PAGE_RADAR) {
+                    currentPage = PAGE_WEATHER;
+                    pageShownAt = System.currentTimeMillis();
+                    generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+                    logFile("PAGE->weather (post-radar)");
                 }
             }
-
-            // ── Alert tracking ─────────────────────────────────────────────────
-            boolean alert = maxThreat >= 60 || ctx.externalRF;
-            if (alert) ctx.statAlertEvents++;
-
-            boolean hasActivity = scorer.hasInterestingActivity(aps, ctx.armed, baseline);
-            if (hasActivity) activitySinceLastRadar = true;
-
-            // ── Radar image (once per minute, only when there is activity) ─────
-            if (ctx.loop % RADAR_EVERY == 0) {
-                if (activitySinceLastRadar) {
-                    List<AP> radarAps = scorer.buildRadarAps(aps, ctx.armed, baseline,
-                            KindleDroneDetectorPro::logFile);
-                    if (!radarAps.isEmpty()) {
-                        logFile(String.format("RADAR trigger: live=%d filtered=%d ghosts=%d",
-                                aps.size(), radarAps.size(),
-                                (int) radarAps.stream().filter(a -> a.ghost).count()));
-                        if (radarMgr.renderAndShow(radarAps, ctx)) {
-                            radarCountdown = RADAR_SHOW_LOOPS;
-                            display.getCurrentPage(); // page is now "radar" externally
-                        }
-                    } else {
-                        logFile("RADAR skip: nothing to show after filter");
-                    }
-                } else {
-                    logFile("RADAR skip: no activity since last render");
-                }
-                activitySinceLastRadar = false;
-            }
-
-            // ── Page-rotation triggers (wall-time based) ───────────────────────
-            if (radarCountdown == 0 && roadCountdown == 0 && historyCountdown == 0) {
-                long roadElapsed = t0 - lastRoadViewAt;
-                if (roadElapsed >= ROAD_VIEW_INTERVAL_MS) {
-                    roadCountdown  = ROAD_VIEW_SHOW_LOOPS;
-                    lastRoadViewAt = t0;
-                    logFile(String.format("ROAD trigger: loop#%d elapsed=%ds",
-                            ctx.loop, roadElapsed / 1000));
-                } else {
-                    long histElapsed = t0 - lastHistoryViewAt;
-                    if (histElapsed >= HISTORY_VIEW_INTERVAL_MS) {
-                        historyCountdown  = HISTORY_SHOW_LOOPS;
-                        lastHistoryViewAt = t0;
-                        logFile(String.format("HISTORY trigger: loop#%d elapsed=%ds",
-                                ctx.loop, histElapsed / 1000));
-                    }
-                }
-            }
-
-            // ── Radar animation cycle ──────────────────────────────────────────
-            if (radarCountdown > 0) {
-                int framesAvailable = Math.min(radarCountdown, RadarRenderer.FRAME_COUNT);
-                int tickInCycle = (RADAR_SHOW_LOOPS - radarCountdown) % framesAvailable;
-                int slotToShow  = (RadarRenderer.nextFrame + tickInCycle) % RadarRenderer.FRAME_COUNT;
-                if (radarCountdown < RADAR_SHOW_LOOPS && tickInCycle == 0) {
-                    KindleUtils.exec("eips", "-g", RadarRenderer.FRAME_FILES[slotToShow]);
-                    KindleUtils.sleep(300);
-                } else if (radarCountdown < RADAR_SHOW_LOOPS) {
-                    display.showRadarAnimFrame(slotToShow);
-                }
-                radarCountdown--;
-                if (radarCountdown == 0) {
-                    roadCountdown    = 0;
-                    historyCountdown = 0;
-                    display.clearForPageSwitch("radar ended, returning to weather page");
-                    logFile("DISPLAY -> radar ended, returning to weather page");
-                }
-            }
-
-            // ── Text page render ───────────────────────────────────────────────
-            if (radarCountdown == 0) {
-                if (roadCountdown > 0) {
-                    display.showRoadRadarPage(ctx);
-                    roadCountdown--;
-                } else if (historyCountdown > 0) {
-                    display.showHistoryPage(ctx);
-                    historyCountdown--;
-                } else {
-                    display.showWeatherPage(ctx);
-                }
-            }
-
-            log(aps, ctx);
-            logLoopToFile(aps, maxThreat, ctx);
-            if (ctx.loop % LOG_ROTATE_EVERY == 0) rotateLogIfNeeded();
 
             // ── Periodic CSV save ──────────────────────────────────────────────
             if (ctx.loop % SAVE_EVERY == 0 && ctx.armed) {
                 saveNetworksCsv(knownNets);
             }
 
-            long wait = FAST_MS - (System.currentTimeMillis() - t0);
+            if (ctx.loop % LOG_ROTATE_EVERY == 0) rotateLogIfNeeded();
+
+            long wait = TICK_MS - (System.currentTimeMillis() - t0);
             if (wait > 0) KindleUtils.sleep(wait);
         }
+    }
+
+    // =========================================================================
+    // Display page generation + show
+    // =========================================================================
+
+    /**
+     * Generate (if needed) and display the given page.
+     * For PAGE_RADAR: render the radar image then block for RADAR_HOLD_MS so it
+     * stays visible for 30 seconds before the caller returns.
+     */
+    static void generateAndShowPage(int page, DetectorContext ctx, DisplayManager display,
+                                     boolean firstRun, RadarImageManager radarMgr) {
+        switch (page) {
+            case PAGE_WEATHER:
+                generateInfoImage(PAGE_WEATHER, ctx);
+                showPngOrFallback(PAGE_FILES[PAGE_WEATHER], ctx, display);
+                break;
+
+            case PAGE_MOON:
+                generateInfoImage(PAGE_MOON, ctx);
+                showPngOrFallback(PAGE_FILES[PAGE_MOON], ctx, display);
+                break;
+
+            case PAGE_SPACE:
+                generateInfoImage(PAGE_SPACE, ctx);
+                showPngOrFallback(PAGE_FILES[PAGE_SPACE], ctx, display);
+                break;
+
+            case PAGE_RADAR:
+                showRadarPage(ctx, display, firstRun, radarMgr);
+                break;
+
+            default:
+                break;
+        }
+    }
+
+    /**
+     * Render the radar image and hold it on screen for RADAR_HOLD_MS.
+     * <p>
+     * First run (no CSV loaded): show ALL visible APs — the user gets a "full map"
+     * of all Wi-Fi signals in range so they can see the device is working.
+     * <p>
+     * Subsequent runs: show only APs whose MAC is NOT in the CSV baseline, i.e.,
+     * devices that appeared since the last run.
+     */
+    static void showRadarPage(DetectorContext ctx, DisplayManager display,
+                               boolean firstRun, RadarImageManager radarMgr) {
+        // Collect the most recent scan result from knownNets
+        List<AP> radarAps = buildRadarAps(ctx, firstRun);
+
+        if (radarAps.isEmpty()) {
+            // Nothing to show — just put up a text placeholder for the hold period
+            display.clearForPageSwitch("radar-empty");
+            KindleUtils.exec("eips", "0", "10", "RADAR: no new MACs");
+            KindleUtils.sleep(RADAR_HOLD_MS);
+            display.clearForPageSwitch("");
+            logFile("RADAR empty");
+            return;
+        }
+
+        // Render + display (eips -g is called inside radarMgr.renderAndShow)
+        boolean shown = radarMgr.renderAndShow(radarAps, ctx);
+        logFile("RADAR shown=" + shown + " aps=" + radarAps.size()
+                + (firstRun ? " FIRST_RUN" : " NEW_ONLY"));
+
+        if (shown) {
+            // Hold the radar image visible for 30 seconds
+            KindleUtils.sleep(RADAR_HOLD_MS);
+        }
+
+        // Restore display cache so the next info page draws cleanly
+        display.clearForPageSwitch("radar-done");
+    }
+
+    /**
+     * Build the AP list for radar rendering.
+     *
+     * First run: all APs that have been seen (from knownNets, present in current scan).
+     * Subsequent runs: only APs whose MAC was NOT in the baseline loaded from CSV.
+     *
+     * We reconstruct AP objects from NetRecord so this works even between scans.
+     */
+    static List<AP> buildRadarAps(DetectorContext ctx, boolean firstRun) {
+        List<AP> result = new ArrayList<>();
+        long now = System.currentTimeMillis();
+        // Only include APs seen in the last 10 minutes
+        long cutoff = now - 600_000L;
+
+        for (NetRecord nr : ctx.knownNets.values()) {
+            if (nr.lastSeen < cutoff) continue;
+            // On subsequent runs, skip MACs that were in the CSV baseline
+            if (!firstRun && ctx.baseline.contains(nr.mac)) continue;
+
+            // Reconstruct a minimal AP from the NetRecord
+            AP a = new AP();
+            a.mac       = nr.mac;
+            a.ssid      = nr.ssid != null ? nr.ssid : "";
+            a.signalDbm = nr.peakSignal;
+            a.channel   = nr.lastChannel;
+            a.dist      = nr.lastDistM >= 0 ? nr.lastDistM
+                        : (!nr.distHistory.isEmpty() ? nr.distHistory.peekLast() : 100);
+            a.distDeltaM = nr.lastDistDeltaM;
+            a.flags     = nr.lastFlags != null ? nr.lastFlags : "";
+            a.threat    = 0; // scorer not re-run here, displayed as neutral
+            result.add(a);
+        }
+        // Sort by distance ascending (nearest first)
+        result.sort((a, b) -> Double.compare(a.dist, b.dist));
+        return result;
+    }
+
+    // =========================================================================
+    // Info image generation (Weather / Moon / Space)
+    // =========================================================================
+
+    static void generateInfoImage(int page, DetectorContext ctx) {
+        try {
+            switch (page) {
+                case PAGE_WEATHER:
+                    KindleWeatherNoKey.generateAndSave(PAGE_FILES[PAGE_WEATHER]);
+                    break;
+                case PAGE_MOON:
+                    KindleMoonCalendarNoKey.generateAndSave(PAGE_FILES[PAGE_MOON]);
+                    break;
+                case PAGE_SPACE:
+                    KindleSpaceWeatherNoKey.generateAndSave(PAGE_FILES[PAGE_SPACE]);
+                    break;
+                default:
+                    break;
+            }
+        } catch (Exception e) {
+            logFile("INFO-ERR p=" + page + " " + e.getMessage());
+        }
+    }
+
+    /** Show PNG via eips -g, falling back to text weather if the file is missing. */
+    static void showPngOrFallback(String file, DetectorContext ctx, DisplayManager display) {
+        java.io.File f = new java.io.File(file);
+        if (f.exists()) {
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(200);
+            KindleUtils.exec("eips", "-g", file);
+            KindleUtils.sleep(500);
+        } else {
+            display.showWeatherPage(ctx);
+        }
+    }
+
+    // =========================================================================
+    // Emergency blink — alternating white / black full-panel flashes
+    // =========================================================================
+
+    static void emergencyBlink(DisplayManager display) {
+        display.clearForPageSwitch("");
+        for (int i = 0; i < BLINK_COUNT; i++) {
+            KindleUtils.exec("eips", "-f");   // white flash
+            KindleUtils.sleep(BLINK_DELAY_MS);
+            KindleUtils.exec("eips", "-c");   // black clear
+            KindleUtils.sleep(BLINK_DELAY_MS);
+        }
+        KindleUtils.exec("eips", "0", "10", "!! DRONE DETECTED !!");
+        KindleUtils.sleep(2000);
+        display.clearForPageSwitch("");
     }
 
     // =========================================================================
@@ -342,7 +485,7 @@ public class KindleDroneDetectorPro {
     static int loadNetworksCsv(Map<String, NetRecord> knownNets, Set<String> baseline) {
         int count = NetCsvStore.load(CSV_FILE, knownNets, baseline,
                 KindleDroneDetectorPro::logFile);
-        if (count > 0) System.out.println("CSV loaded: " + count + " networks from " + CSV_FILE);
+        if (count > 0) System.out.println("CSV: " + count + " nets");
         return count;
     }
 
@@ -354,22 +497,20 @@ public class KindleDroneDetectorPro {
     // Known-nets updater
     // =========================================================================
 
-    /** Merge the current scan into the persistent knownNets map. */
     static void updateKnownNets(List<AP> aps, DetectorContext ctx) {
         Map<String, NetRecord> knownNets = ctx.knownNets;
         Set<String>            baseline  = ctx.baseline;
 
-        int before = knownNets.size();
         for (AP a : aps) {
             if (a.mac == null || a.mac.isEmpty()) continue;
             NetRecord nr = knownNets.get(a.mac);
             if (nr == null) {
                 nr = new NetRecord(a.mac);
                 knownNets.put(a.mac, nr);
-                // NOTE: do NOT touch statTotalScans here — it counts scan loops
-                // (incremented once per main-loop iteration). Unique-MAC count is
-                // reported separately via knownNets.size().
-                if (ctx.armed && !baseline.contains(a.mac)) ctx.statNewArmed++;
+                if (ctx.armed && !baseline.contains(a.mac)) {
+                    ctx.statNewArmed++;
+                    logFile("NEW " + a.mac + " " + a.ssid + " " + (int) a.dist + "m");
+                }
             }
             nr.update(a);
             a.distDeltaM = nr.lastDistDeltaM;
@@ -378,25 +519,17 @@ public class KindleDroneDetectorPro {
                 String nm = (a.ssid != null && !a.ssid.isEmpty()
                         && !"[HIDDEN]".equals(a.ssid)) ? a.ssid : a.mac;
                 if (nr.surgeDetected) {
-                    logFile(String.format("!! SURGE  %-14s +%ddBm sig=%d ch=%-2d ema=%dm #%d",
-                            nm, nr.surgeRawDelta, a.signalDbm,
-                            a.channel, nr.lastDistM, nr.surgeCount));
+                    logFile("SURGE " + nm + " +" + nr.surgeRawDelta + "dBm " + nr.lastDistM + "m");
                 }
                 if (nr.consecutiveApproach == 3) {
-                    logFile(String.format("!! APPROACH %-14s streak=3 dist=%dm trend=%s",
-                            nm, nr.lastDistM,
-                            MovementMetrics.sparkline(nr.distHistory)));
+                    logFile("APPROACH " + nm + " " + nr.lastDistM + "m");
                 }
             }
         }
-        // Bound the map size to prevent unbounded growth
         if (knownNets.size() > 2000) {
             Iterator<String> it = knownNets.keySet().iterator();
             while (knownNets.size() > 1800 && it.hasNext()) { it.next(); it.remove(); }
-            logFile("knownNets trimmed to " + knownNets.size());
         }
-        int after = knownNets.size();
-        if (after > before) logFile("knownNets: +" + (after - before) + " new MACs");
     }
 
     // =========================================================================
@@ -407,18 +540,15 @@ public class KindleDroneDetectorPro {
 
     static void openLogFile() {
         try {
-            // Force UTF-8 so log text is charset-independent of the Kindle JVM default
-            // (which may be US-ASCII and would corrupt non-ASCII characters).
             logWriter = new PrintWriter(new BufferedWriter(new OutputStreamWriter(
                     new FileOutputStream(LOG_FILE, true),
                     java.nio.charset.StandardCharsets.UTF_8)), true);
             logWriter.println("--- START " + new Date() + " ---");
         } catch (IOException e) {
-            System.err.println("Cannot open log file: " + e.getMessage());
+            System.err.println("log open: " + e.getMessage());
         }
     }
 
-    /** Size-based log rotation: keep one backup (drone_log.txt.1) and start fresh. */
     static void rotateLogIfNeeded() {
         try {
             File f = new File(LOG_FILE);
@@ -428,9 +558,8 @@ public class KindleDroneDetectorPro {
             if (bak.exists()) bak.delete();
             f.renameTo(bak);
             openLogFile();
-            logFile("log rotated (previous kept as drone_log.txt.1)");
         } catch (Exception e) {
-            System.err.println("log rotate failed: " + e.getMessage());
+            System.err.println("log rotate: " + e.getMessage());
         }
     }
 
@@ -438,85 +567,52 @@ public class KindleDroneDetectorPro {
         if (logWriter != null) logWriter.printf("%tT %s%n", System.currentTimeMillis(), msg);
     }
 
+    /** Compact console log — only notable APs. */
     static void log(List<AP> aps, DetectorContext ctx) {
-        System.out.printf("%n== #%d %tT APs:%d CRC+%d iCRC:%d NF:%d SNR:%d LQ:%d %s ==%n",
-                ctx.loop, System.currentTimeMillis(), aps.size(), ctx.crcDelta, ctx.idleCRC,
-                ctx.noiseFloor, ctx.csSnr, ctx.linkQuality,
-                ctx.externalRF ? " !!RF!!" : "");
-        int i = 0;
+        int notable = 0;
         for (AP a : aps) {
-            i++;
             History h = ctx.temporal.get(a.mac);
-            boolean notable = a.threat > 0 || (h != null && (h.isNew || h.isMoving)) || i <= 5;
-            if (!notable) {
-                if (i == 6) System.out.printf("  ... (%d more background APs)%n", aps.size() - 5);
-                continue;
-            }
-            System.out.printf("%2d)%3d %-17s %-14s C%-2d %4ddBm %5.0fm"
-                    + " sd=%.1f hop=%d %s%s%s%n",
-                    i, a.threat, a.mac, a.ssid, a.channel, a.signalDbm, a.dist,
-                    h != null ? h.stddev : 0, h != null ? h.chChanges : 0,
-                    a.flags,
-                    a.ghost ? " [GHOST]" : "",
-                    ctx.baseline.contains(a.mac) ? "" : " [NEW]");
+            if (a.threat > 0 || (h != null && (h.isNew || h.isMoving))) notable++;
+        }
+        System.out.printf("#%d APs:%d notable:%d CRC+%d NF:%d%s%n",
+                ctx.loop, aps.size(), notable, ctx.crcDelta, ctx.noiseFloor,
+                ctx.externalRF ? " !!RF" : "");
+        for (AP a : aps) {
+            History h = ctx.temporal.get(a.mac);
+            if (a.threat < 30 && (h == null || (!h.isNew && !h.isMoving))) continue;
+            System.out.printf("  %3d %-17s %-12s %4ddBm %4.0fm %s%n",
+                    a.threat, a.mac, a.ssid, a.signalDbm, a.dist, a.flags);
         }
     }
 
+    /** File log — compact summary every scan; full AP dump only on notable events. */
     static void logLoopToFile(List<AP> aps, int maxThreat, DetectorContext ctx) {
         if (logWriter == null) return;
 
-        logWriter.printf("%tT #%d AP:%d CRC+%d iCRC:%d NF:%d SNR:%d THR:%d%s%n",
-                System.currentTimeMillis(), ctx.loop, aps.size(), ctx.crcDelta, ctx.idleCRC,
-                ctx.noiseFloor, ctx.csSnr, maxThreat,
-                ctx.externalRF ? " !!RF!!" : "");
+        logWriter.printf("%tT #%d AP:%d THR:%d NF:%d%s%n",
+                System.currentTimeMillis(), ctx.loop, aps.size(), maxThreat,
+                ctx.noiseFloor, ctx.externalRF ? " RF" : "");
 
-        boolean hasFastApproach = false;
-        for (AP a : aps) {
-            NetRecord nr = ctx.knownNets.get(a.mac);
-            if (nr != null && !ctx.baseline.contains(a.mac)
-                    && (nr.surgeDetected || nr.consecutiveApproach >= 3)) {
-                hasFastApproach = true;
-                break;
-            }
-        }
-        boolean fullDump = (maxThreat >= DUMP_THREAT_MIN || ctx.externalRF
-                || ctx.loop % HEARTBEAT_EVERY == 0 || hasFastApproach);
-        if (!fullDump) return;
         boolean heartbeat = (ctx.loop % HEARTBEAT_EVERY == 0);
+        if (maxThreat < DUMP_THREAT_MIN && !ctx.externalRF && !heartbeat) return;
 
-        int idx = 0;
-        int skipped = 0;
+        int idx = 0, skipped = 0;
         for (AP a : aps) {
             idx++;
             History   h  = ctx.temporal.get(a.mac);
             NetRecord nr = ctx.knownNets.get(a.mac);
-            double stddev = h  != null ? h.stddev    : 0;
-            int    hops   = h  != null ? h.chChanges : 0;
-            int    gaps   = h  != null ? h.gaps      : 0;
-            boolean isNew = h  != null && h.isNew;
-            boolean isMov = h  != null && h.isMoving;
-            boolean isHop = h  != null && h.isHopping;
-
-            // Only log APs that carry information; skip silent background routers.
-            // On the periodic heartbeat keep the top 5 (already sorted by threat/dist) for context.
-            boolean notable = a.threat >= 10 || isNew || isMov || isHop
+            boolean isNew = h != null && h.isNew;
+            boolean isMov = h != null && h.isMoving;
+            boolean notable = a.threat >= 10 || isNew || isMov
                     || (nr != null && (nr.surgeDetected || nr.consecutiveApproach >= 3));
-            if (!notable && !(heartbeat && idx <= 5)) { skipped++; continue; }
-
-            int    emaM   = nr != null && nr.lastDistM >= 0 ? nr.lastDistM : (int) a.dist;
-            int    smaSig = nr != null && nr.smoothedRssi != Integer.MIN_VALUE
-                            ? nr.smoothedRssi : a.signalDbm;
-            int    ca     = nr != null ? nr.consecutiveApproach : 0;
-            String srg    = nr != null && nr.surgeDetected ? "!" : " ";
-            String inBase = ctx.baseline.contains(a.mac) ? "BASE" : "NEW ";
-            logWriter.printf("  [%2d] %s %-17s %-14s C%-2d %4ddBm%s(%3ddBm) %4dm"
-                    + " thr=%-3d sd=%.1f hop=%d gap=%d ca=%-2d %s%s%s%s flags=[%s]%n",
-                    idx, inBase, a.mac, a.ssid, a.channel, a.signalDbm, srg, smaSig, emaM,
-                    a.threat, stddev, hops, gaps, ca,
-                    isNew ? "N" : "-", isMov ? "M" : "-", isHop ? "H" : "-",
-                    a.ghost ? "G" : "-",
-                    a.flags);
+            if (!notable && !(heartbeat && idx <= 3)) { skipped++; continue; }
+            int emaM = nr != null && nr.lastDistM >= 0 ? nr.lastDistM : (int) a.dist;
+            logWriter.printf("  %s %-17s %-12s %3ddBm %4dm thr=%-3d %s%s%s [%s]%n",
+                    ctx.baseline.contains(a.mac) ? "B" : "N",
+                    a.mac, a.ssid, a.signalDbm, emaM, a.threat,
+                    isNew ? "N" : "-", isMov ? "M" : "-",
+                    a.ghost ? "G" : "-", a.flags);
         }
-        if (skipped > 0) logWriter.printf("       ... (%d background APs omitted)%n", skipped);
+        if (skipped > 0) logWriter.printf("  +%d bg%n", skipped);
     }
 }

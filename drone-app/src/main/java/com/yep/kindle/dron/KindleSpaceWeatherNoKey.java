@@ -50,21 +50,22 @@ public class KindleSpaceWeatherNoKey {
 
     public static void main(String[] args) {
         try {
-            System.out.println("Fetching NOAA space weather data...");
-            List<SolarRegion> regions = fetchSolarRegions();
-            List<XRayFlux>    xrays   = fetchXRayFlux();
-            List<KpIndex>     kpList  = fetchKpIndex();
-
-            System.out.println("Rendering space weather image for Kindle...");
-            BufferedImage image = renderSpaceWeatherImage(regions, xrays, kpList);
-
-            File output = new File("kindle-space-weather.png");
-            ImageIO.write(image, "png", output);
-            System.out.println("Successfully generated image: " + output.getAbsolutePath());
-
+            generateAndSave("kindle-space-weather.png");
         } catch (Exception e) {
             e.printStackTrace();
         }
+    }
+
+    /**
+     * Fetch NOAA data, render image, and save to the given path.
+     * Called by KindleDroneDetectorPro for in-process image generation.
+     */
+    public static void generateAndSave(String outputPath) throws Exception {
+        List<SolarRegion> regions = fetchSolarRegions();
+        List<XRayFlux>    xrays   = fetchXRayFlux();
+        List<KpIndex>     kpList  = fetchKpIndex();
+        BufferedImage image = renderSpaceWeatherImage(regions, xrays, kpList);
+        ImageIO.write(image, "png", new File(outputPath));
     }
 
     // -------------------------------------------------------------------------
