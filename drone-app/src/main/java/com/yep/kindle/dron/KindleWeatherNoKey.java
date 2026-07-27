@@ -31,7 +31,7 @@ public class KindleWeatherNoKey {
     private static final int HEIGHT = 800;
     private static final DateTimeFormatter API_TIME = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
     private static final DateTimeFormatter API_TIME_LABEL = DateTimeFormatter.ofPattern("HH:mm");
-    private static final DateTimeFormatter DATE_LABEL = DateTimeFormatter.ofPattern("MM-dd");
+    private static final DateTimeFormatter DATE_LABEL = DateTimeFormatter.ofPattern("EEE, dd MMM", Locale.ENGLISH);
     private static Font weatherIconBaseFont;
 
     public static void main(String[] args) {
@@ -58,10 +58,9 @@ public class KindleWeatherNoKey {
         String urlString = "https://api.open-meteo.com/v1/forecast"
                 + "?latitude=" + LAT
                 + "&longitude=" + LON
-                // `time` is returned automatically and is not a selectable variable.
-                + "&current=temperature_2m,weather_code"
+                + "&current=temperature_2m,weather_code,apparent_temperature,relative_humidity_2m,wind_speed_10m"
                 + "&hourly=temperature_2m,weather_code"
-                + "&daily=sunrise,sunset"
+                + "&daily=sunrise,sunset,temperature_2m_max,temperature_2m_min"
                 + "&forecast_days=2"
                 + "&timezone=auto";
 
@@ -103,82 +102,193 @@ public class KindleWeatherNoKey {
     }
 
     private static BufferedImage generateEInkImage(WeatherSnapshot snapshot) {
-        // Create a 1-bit binary image palette optimized strictly for sharp e-ink screens
-        BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_BYTE_BINARY);
+        // Grayscale image for richer visual shading on e-ink
+        BufferedImage image = new BufferedImage(WIDTH, HEIGHT, BufferedImage.TYPE_BYTE_GRAY);
         Graphics2D g2d = image.createGraphics();
 
-        // Turn off text anti-aliasing for razor-sharp pixel representation on e-ink
-        g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_OFF);
+        // Enable antialiasing for smooth shapes, but crisp text
+        g2d.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
         g2d.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+        g2d.setRenderingHint(RenderingHints.KEY_RENDERING, RenderingHints.VALUE_RENDER_QUALITY);
 
-        // Fill background white
+        // --- BACKGROUND: white ---
         g2d.setColor(Color.WHITE);
         g2d.fillRect(0, 0, WIDTH, HEIGHT);
 
-        // Set drawing elements to black
+        // =====================================================================
+        // HEADER BAR — filled black banner with white text
+        // =====================================================================
         g2d.setColor(Color.BLACK);
-        g2d.setStroke(new BasicStroke(2));
-        g2d.drawRect(12, 12, WIDTH - 24, HEIGHT - 24);
+        g2d.fillRect(0, 0, WIDTH, 110);
 
-        // Header block
-        int headerTop = 34;
+        // Large weather icon (white) on the black header
         boolean currentDay = isDaytime(snapshot.currentTime, snapshot.sunriseTime, snapshot.sunsetTime);
-        drawWeatherIcon(g2d, snapshot.currentCode, currentDay, 34, headerTop + 4, 120, 100);
-        g2d.setFont(new Font("SansSerif", Font.BOLD, 42));
-        g2d.drawString(shortCondition(snapshot.currentCode), 172, 74);
-        g2d.setFont(new Font("SansSerif", Font.PLAIN, 48));
-        g2d.drawString("Kharkiv", 364, 80);
-        g2d.setStroke(new BasicStroke(3));
-        g2d.drawLine(20, 122, WIDTH - 20, 122);
-
-        // Top metrics line
-        g2d.setFont(new Font("SansSerif", Font.BOLD, 84));
-        g2d.drawString(formatTemp(snapshot.currentTemp), 26, 218);
-        g2d.setFont(new Font("Monospaced", Font.BOLD, 80));
-        g2d.drawString(snapshot.currentDate.format(DATE_LABEL), 304, 214);
-
-        g2d.drawLine(20, 240, WIDTH - 20, 240);
-
-        // Main clock block
-        g2d.setFont(new Font("Monospaced", Font.BOLD, 188));
-        g2d.drawString(snapshot.currentTime.format(API_TIME_LABEL), 24, 470);
-        g2d.drawLine(20, 510, WIDTH - 20, 510);
-
-        // 4-slot hourly strip
-        int slotY = 532;
-        for (int i = 0; i < snapshot.slots.size(); i++) {
-            HourSlot slot = snapshot.slots.get(i);
-            int x = 20 + i * 140;
-            if (i > 0) {
-                g2d.setStroke(new BasicStroke(1));
-                g2d.drawLine(x, 520, x, 748);
-            }
-            g2d.setFont(new Font("SansSerif", Font.PLAIN, 30));
-            g2d.drawString(slot.timeLabel, x + 38, slotY + 26);
-            boolean slotDay = isDaytime(slot.slotTime, snapshot.sunriseTime, snapshot.sunsetTime);
-            drawWeatherIcon(g2d, slot.weatherCode, slotDay, x + 24, slotY + 36, 92, 74);
-            g2d.setFont(new Font("SansSerif", Font.BOLD, 44));
-            g2d.drawString(formatTemp(slot.temperature), x + 28, slotY + 180);
-            g2d.setFont(new Font("SansSerif", Font.PLAIN, 20));
-            g2d.drawString(shortCondition(slot.weatherCode), x + 10, slotY + 210);
-        }
-
-        // Footer details
-        g2d.setStroke(new BasicStroke(2));
-        g2d.drawLine(20, 748, WIDTH - 20, 748);
         Font iconBase = getWeatherIconBaseFont();
         if (iconBase != null) {
-            Font footerIconFont = iconBase.deriveFont(Font.PLAIN, 24f);
-            g2d.setFont(footerIconFont);
-            g2d.drawString(new String(Character.toChars(0xF051)), 28, 782);
-            g2d.drawString(new String(Character.toChars(0xF052)), 286, 782);
-            g2d.setFont(new Font("SansSerif", Font.PLAIN, 24));
-            g2d.drawString(snapshot.sunrise, 58, 782);
-            g2d.drawString(snapshot.sunset, 316, 782);
+            Font bigIcon = iconBase.deriveFont(Font.PLAIN, 80f);
+            g2d.setFont(bigIcon);
+            g2d.setColor(Color.WHITE);
+            String glyph = weatherIconGlyph(snapshot.currentCode, currentDay);
+            FontMetrics fm = g2d.getFontMetrics(bigIcon);
+            int iconY = 88;
+            g2d.drawString(glyph, 18, iconY);
+
+            // Condition label next to icon
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 34));
+            g2d.drawString(shortCondition(snapshot.currentCode), 112, 56);
+
+            // City name — right-aligned
+            g2d.setFont(new Font("SansSerif", Font.PLAIN, 26));
+            String city = "Kharkiv, UA";
+            FontMetrics fmCity = g2d.getFontMetrics();
+            g2d.drawString(city, WIDTH - fmCity.stringWidth(city) - 18, 56);
+
+            // Date below condition in header
+            g2d.setFont(new Font("SansSerif", Font.PLAIN, 22));
+            g2d.drawString(snapshot.currentDate.format(DATE_LABEL), 112, 88);
+        } else {
+            g2d.setColor(Color.WHITE);
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 34));
+            g2d.drawString(shortCondition(snapshot.currentCode), 20, 56);
+            g2d.setFont(new Font("SansSerif", Font.PLAIN, 22));
+            g2d.drawString("Kharkiv  " + snapshot.currentDate.format(DATE_LABEL), 20, 88);
+        }
+
+        // =====================================================================
+        // TEMPERATURE BLOCK — huge centered temperature
+        // =====================================================================
+        g2d.setColor(Color.BLACK);
+        // Main temperature — very large, centered
+        String tempStr = formatTemp(snapshot.currentTemp);
+        g2d.setFont(new Font("SansSerif", Font.BOLD, 148));
+        FontMetrics fmTemp = g2d.getFontMetrics();
+        int tempX = (WIDTH - fmTemp.stringWidth(tempStr)) / 2;
+        g2d.drawString(tempStr, tempX, 278);
+
+        // Feels-like and humidity on the same row, below main temp
+        g2d.setFont(new Font("SansSerif", Font.PLAIN, 22));
+        String feelsLike = "Feels " + formatTemp(snapshot.feelsLike);
+        String humidity  = "Hum " + snapshot.humidity + "%";
+        String wind      = "Wind " + snapshot.windSpeed + " km/h";
+        g2d.drawString(feelsLike, 30, 310);
+        g2d.drawString(humidity,  210, 310);
+        g2d.drawString(wind,      380, 310);
+
+        // Daily hi/lo strip
+        g2d.setFont(new Font("SansSerif", Font.BOLD, 22));
+        String hiLo = "\u25B2 " + formatTemp(snapshot.tempMax) + "   \u25BC " + formatTemp(snapshot.tempMin);
+        FontMetrics fmHiLo = g2d.getFontMetrics();
+        g2d.drawString(hiLo, (WIDTH - fmHiLo.stringWidth(hiLo)) / 2, 342);
+
+        // Separator
+        g2d.setStroke(new BasicStroke(2));
+        g2d.drawLine(20, 360, WIDTH - 20, 360);
+
+        // =====================================================================
+        // CLOCK ROW
+        // =====================================================================
+        g2d.setFont(new Font("Monospaced", Font.BOLD, 130));
+        String clockStr = snapshot.currentTime.format(API_TIME_LABEL);
+        FontMetrics fmClock = g2d.getFontMetrics();
+        int clockX = (WIDTH - fmClock.stringWidth(clockStr)) / 2;
+        g2d.drawString(clockStr, clockX, 488);
+
+        // Separator
+        g2d.setStroke(new BasicStroke(2));
+        g2d.drawLine(20, 502, WIDTH - 20, 502);
+
+        // =====================================================================
+        // HOURLY FORECAST STRIP — 4 slots
+        // =====================================================================
+        int slotW = (WIDTH - 40) / 4;  // 140px each
+        int stripTop = 508;
+        int stripBottom = 738;
+
+        for (int i = 0; i < snapshot.slots.size(); i++) {
+            HourSlot slot = snapshot.slots.get(i);
+            int slotX = 20 + i * slotW;
+
+            // Alternating shaded background for even slots
+            if (i % 2 == 1) {
+                g2d.setColor(new Color(220, 220, 220));
+                g2d.fillRect(slotX, stripTop, slotW, stripBottom - stripTop);
+                g2d.setColor(Color.BLACK);
+            }
+
+            // Vertical dividers
+            if (i > 0) {
+                g2d.setColor(Color.BLACK);
+                g2d.setStroke(new BasicStroke(1));
+                g2d.drawLine(slotX, stripTop, slotX, stripBottom);
+            }
+
+            // Time label — centered
+            g2d.setColor(Color.BLACK);
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 22));
+            FontMetrics fmSlot = g2d.getFontMetrics();
+            int timeW = fmSlot.stringWidth(slot.timeLabel);
+            g2d.drawString(slot.timeLabel, slotX + (slotW - timeW) / 2, stripTop + 26);
+
+            // Weather icon — centered in slot
+            boolean slotDay = isDaytime(slot.slotTime, snapshot.sunriseTime, snapshot.sunsetTime);
+            if (iconBase != null) {
+                Font slotIcon = iconBase.deriveFont(Font.PLAIN, 58f);
+                g2d.setFont(slotIcon);
+                FontMetrics fmIcon = g2d.getFontMetrics(slotIcon);
+                String glyph = weatherIconGlyph(slot.weatherCode, slotDay);
+                int glyphW = fmIcon.stringWidth(glyph);
+                g2d.drawString(glyph, slotX + (slotW - glyphW) / 2, stripTop + 100);
+            } else {
+                drawWeatherIconGeometric(g2d, slot.weatherCode, slotDay,
+                        slotX + 10, stripTop + 36, slotW - 20, 68);
+            }
+
+            // Temperature — large, centered
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 36));
+            String t = formatTemp(slot.temperature);
+            FontMetrics fmT = g2d.getFontMetrics();
+            g2d.drawString(t, slotX + (slotW - fmT.stringWidth(t)) / 2, stripTop + 152);
+
+            // Condition label — small, centered
+            g2d.setFont(new Font("SansSerif", Font.PLAIN, 16));
+            String cond = shortCondition(slot.weatherCode);
+            FontMetrics fmCond = g2d.getFontMetrics();
+            g2d.drawString(cond, slotX + (slotW - fmCond.stringWidth(cond)) / 2, stripTop + 178);
+        }
+
+        // =====================================================================
+        // FOOTER — sunrise / sunset with icons
+        // =====================================================================
+        g2d.setColor(Color.BLACK);
+        g2d.setStroke(new BasicStroke(2));
+        g2d.drawLine(20, stripBottom + 2, WIDTH - 20, stripBottom + 2);
+
+        int footerY = 786;
+        if (iconBase != null) {
+            Font footerIcon = iconBase.deriveFont(Font.PLAIN, 30f);
+            g2d.setFont(footerIcon);
+            // Sunrise icon + time
+            g2d.drawString(new String(Character.toChars(0xF051)), 28, footerY);
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 26));
+            g2d.drawString(snapshot.sunrise, 68, footerY);
+
+            // Vertical separator
+            g2d.setStroke(new BasicStroke(1));
+            g2d.drawLine(WIDTH / 2, 748, WIDTH / 2, 800);
+
+            // Sunset icon + time
+            g2d.setFont(footerIcon);
+            g2d.drawString(new String(Character.toChars(0xF052)), 315, footerY);
+            g2d.setFont(new Font("SansSerif", Font.BOLD, 26));
+            g2d.drawString(snapshot.sunset, 355, footerY);
         } else {
             g2d.setFont(new Font("SansSerif", Font.PLAIN, 24));
-            g2d.drawString("Sunrise " + snapshot.sunrise + "  Sunset " + snapshot.sunset, 172, 782);
+            g2d.drawString("Sunrise " + snapshot.sunrise + "   Sunset " + snapshot.sunset, 60, footerY);
         }
+
+        // Outer border
+        g2d.setStroke(new BasicStroke(3));
+        g2d.drawRect(2, 2, WIDTH - 4, HEIGHT - 4);
 
         g2d.dispose();
         return image;
@@ -188,6 +298,10 @@ public class KindleWeatherNoKey {
         WeatherSnapshot snapshot = new WeatherSnapshot();
         snapshot.currentTemp = extractDouble(json, "\"current\":\\{", "\"temperature_2m\":", 0.0);
         snapshot.currentCode = (int) extractDouble(json, "\"current\":\\{", "\"weather_code\":", 3);
+        snapshot.feelsLike   = extractDouble(json, "\"current\":\\{", "\"apparent_temperature\":", snapshot.currentTemp);
+        snapshot.humidity    = (int) extractDouble(json, "\"current\":\\{", "\"relative_humidity_2m\":", 0);
+        snapshot.windSpeed   = (int) Math.round(extractDouble(json, "\"current\":\\{", "\"wind_speed_10m\":", 0));
+
         String currentIsoTime = extractString(json, "\"current\":\\{", "\"time\":", LocalDateTime.now().format(API_TIME));
         LocalDateTime currentDateTime = parseApiDateTime(currentIsoTime);
         snapshot.currentDate = currentDateTime.toLocalDate();
@@ -211,7 +325,6 @@ public class KindleWeatherNoKey {
                 slot.timeLabel = formatSlotLabel(hourlyTimes, idx);
                 slot.slotTime = parseLabelTime(slot.timeLabel);
             } else {
-                // Keep UI deterministic even if API omits hourly times.
                 LocalTime fallbackTime = currentDateTime.plusHours((i + 1) * 3L).toLocalTime();
                 slot.timeLabel = fallbackTime.format(API_TIME_LABEL);
                 slot.slotTime = fallbackTime;
@@ -225,28 +338,24 @@ public class KindleWeatherNoKey {
         String dailySection = extractSectionObject(json, "\"daily\":");
         String[] sunrises = parseStringArray(dailySection, "sunrise");
         String[] sunsets = parseStringArray(dailySection, "sunset");
+        double[] maxTemps = parseDoubleArray(dailySection, "temperature_2m_max");
+        double[] minTemps = parseDoubleArray(dailySection, "temperature_2m_min");
+
         snapshot.sunrise = formatTimeOnly(sunrises.length > 0 ? sunrises[0] : "--:--");
         snapshot.sunset = formatTimeOnly(sunsets.length > 0 ? sunsets[0] : "--:--");
         snapshot.sunriseTime = parseLabelTime(snapshot.sunrise);
         snapshot.sunsetTime = parseLabelTime(snapshot.sunset);
+        snapshot.tempMax = maxTemps.length > 0 ? maxTemps[0] : snapshot.currentTemp;
+        snapshot.tempMin = minTemps.length > 0 ? minTemps[0] : snapshot.currentTemp;
         return snapshot;
     }
 
-    private static void drawWeatherIcon(Graphics2D g2d, int code, boolean isDaytime, int x, int y, int w, int h) {
-        Font iconBase = getWeatherIconBaseFont();
-        if (iconBase != null) {
-            String glyph = weatherIconGlyph(code, isDaytime);
-            float fontSize = Math.max(32f, Math.min(w, h) * 0.9f);
-            Font iconFont = iconBase.deriveFont(Font.PLAIN, fontSize);
-            g2d.setFont(iconFont);
-            FontMetrics fm = g2d.getFontMetrics(iconFont);
-            int textX = x + (w - fm.stringWidth(glyph)) / 2;
-            int textY = y + ((h - fm.getHeight()) / 2) + fm.getAscent();
-            g2d.drawString(glyph, textX, textY);
-            return;
-        }
+    // -------------------------------------------------------------------------
+    // Icon drawing
+    // -------------------------------------------------------------------------
 
-        // Fallback to geometric icons when font resources are unavailable.
+    private static void drawWeatherIconGeometric(Graphics2D g2d, int code, boolean isDaytime,
+                                                  int x, int y, int w, int h) {
         if (code == 0) {
             drawSun(g2d, x + w / 2 - 22, y + h / 2 - 22, 44);
         } else if (code == 1 || code == 2 || code == 3) {
@@ -344,6 +453,10 @@ public class KindleWeatherNoKey {
         return new String(Character.toChars(codePoint));
     }
 
+    // -------------------------------------------------------------------------
+    // Geometric icon fallbacks
+    // -------------------------------------------------------------------------
+
     private static void drawCloud(Graphics2D g2d, int x, int y, int w, int h, boolean fog) {
         g2d.setStroke(new BasicStroke(3));
         int bubbleY = y + h / 2;
@@ -402,6 +515,10 @@ public class KindleWeatherNoKey {
         }
     }
 
+    // -------------------------------------------------------------------------
+    // Utility helpers
+    // -------------------------------------------------------------------------
+
     private static String shortCondition(int code) {
         switch (code) {
             case 0: return "Clear";
@@ -431,7 +548,7 @@ public class KindleWeatherNoKey {
     }
 
     private static String formatTemp(double temp) {
-        return String.format(Locale.ENGLISH, "%d°C", (int) Math.round(temp));
+        return String.format(Locale.ENGLISH, "%d\u00B0C", (int) Math.round(temp));
     }
 
     private static String extractSectionObject(String json, String keyToken) {
@@ -576,7 +693,6 @@ public class KindleWeatherNoKey {
             }
         }
 
-        // When current contains minutes (e.g. 11:45), pick the latest hourly bucket <= now.
         int bestIndex = -1;
         LocalDateTime bestTime = null;
         for (int i = 0; i < hourlyTimes.length; i++) {
@@ -587,7 +703,6 @@ public class KindleWeatherNoKey {
                     bestIndex = i;
                 }
             } catch (Exception ignored) {
-                // Keep scanning; malformed entries are skipped.
             }
         }
         if (bestIndex >= 0) {
@@ -617,20 +732,6 @@ public class KindleWeatherNoKey {
         }
     }
 
-    // WMO Weather interpretation codes mapping for Open-Meteo
-    private static String decodeWeatherCode(int code) {
-        switch (code) {
-            case 0: return "Clear Sky";
-            case 1: case 2: case 3: return "Partly Cloudy";
-            case 45: case 48: return "Foggy";
-            case 51: case 53: case 55: return "Drizzle";
-            case 61: case 63: case 65: return "Rain";
-            case 71: case 73: case 75: return "Snow";
-            case 95: case 96: case 99: return "Thunderstorm";
-            default: return "Overcast";
-        }
-    }
-
     private static LocalTime parseLabelTime(String value) {
         try {
             return LocalTime.parse(value, API_TIME_LABEL);
@@ -649,9 +750,18 @@ public class KindleWeatherNoKey {
         return !time.isBefore(sunrise) || time.isBefore(sunset);
     }
 
+    // -------------------------------------------------------------------------
+    // Data models
+    // -------------------------------------------------------------------------
+
     private static class WeatherSnapshot {
         private double currentTemp;
         private int currentCode;
+        private double feelsLike;
+        private int humidity;
+        private int windSpeed;
+        private double tempMax;
+        private double tempMin;
         private LocalDate currentDate = LocalDate.now();
         private LocalTime currentTime = LocalTime.now();
         private final List<HourSlot> slots = new ArrayList<HourSlot>();
