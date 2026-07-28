@@ -1,7 +1,14 @@
 package com.yep.kindle.dron;
 
 import java.io.*;
+import java.awt.Color;
+import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Graphics2D;
+import java.awt.RenderingHints;
+import java.awt.image.BufferedImage;
 import java.util.*;
+import javax.imageio.ImageIO;
 
 import com.yep.kindle.dron.detection.TemporalEngine;
 import com.yep.kindle.dron.detection.ThreatScorer;
@@ -15,6 +22,7 @@ import com.yep.kindle.dron.model.NetRecord;
 import com.yep.kindle.dron.service.NetCsvStore;
 import com.yep.kindle.dron.service.WeatherService;
 import com.yep.kindle.dron.service.WifiScanner;
+import com.yep.kindle.dron.tool.KindleTcpListener;
 import com.yep.kindle.dron.util.KindleUtils;
 
 /**
@@ -55,6 +63,7 @@ public class KindleDroneDetectorPro {
     static final long PAGE_HOLD_MS      = 300_000L;  // 5 min per page
     /** How long the radar image stays visible (ms). */
     static final long RADAR_HOLD_MS     = 30_000L;   // 30 s
+    static final long MESSAGE_HOLD_MS   = 20_000L;   // 20 s temporary message overlay
 
     // Display page indices
     static final int PAGE_WEATHER  = 0;
@@ -92,6 +101,7 @@ public class KindleDroneDetectorPro {
     static final String LOG_FILE = "/mnt/us/drone_log.txt";
     static final String CSV_FILE = "/mnt/us/drone_nets.csv";
     static final String CSV_TMP  = "/mnt/us/drone_nets.csv.tmp";
+    static final String MESSAGE_FILE = "/mnt/us/message.png";
 
     // ── Logging controls ──────────────────────────────────────────────────────
     static final long LOG_MAX_BYTES    = 256 * 1024;
@@ -164,8 +174,13 @@ public class KindleDroneDetectorPro {
         generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
         logFile("PAGE->weather");
 
+        boolean listenerStarted = KindleTcpListener.startAsync();
+        logFile(listenerStarted ? "TCP listener started on :5555" : "TCP listener already running");
+
         // ── Scan / alert state ────────────────────────────────────────────────
         boolean emergencyActive = false;
+        long shownOverlayId = -1;
+        boolean overlayVisible = false;
 
         // =========================================================================
         // Main loop
@@ -282,9 +297,25 @@ public class KindleDroneDetectorPro {
             }
 
             // ── Page rotation ─────────────────────────────────────────────────
+            KindleTcpListener.OverlaySnapshot overlay = KindleTcpListener.getActiveOverlay();
+            if (overlay != null) {
+                if (!overlayVisible || shownOverlayId != overlay.id) {
+                    showOverlayMessage(display, overlay.message);
+                    shownOverlayId = overlay.id;
+                    overlayVisible = true;
+                    logFile("MSG shown id=" + overlay.id);
+                }
+            } else if (overlayVisible) {
+                overlayVisible = false;
+                shownOverlayId = -1;
+                pageShownAt = System.currentTimeMillis();
+                generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+                logFile("MSG done -> PAGE->" + PAGE_NAMES[currentPage]);
+            }
+
             // Advance to next page when the hold time has elapsed.
             now = System.currentTimeMillis();
-            if (now - pageShownAt >= PAGE_HOLD_MS) {
+            if (!overlayVisible && now - pageShownAt >= PAGE_HOLD_MS) {
                 currentPage = (currentPage + 1) % PAGE_COUNT;
                 pageShownAt = now;
                 generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
@@ -459,6 +490,94 @@ public class KindleDroneDetectorPro {
         } else {
             display.showWeatherPage(ctx);
         }
+    }
+
+    static void showOverlayMessage(DisplayManager display, String message) {
+        String text = (message == null || message.trim().isEmpty()) ? "(empty)" : message.trim();
+        try {
+            renderMessageImage(text, MESSAGE_FILE);
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(120);
+            KindleUtils.exec("eips", "-g", MESSAGE_FILE);
+            KindleUtils.sleep(250);
+        } catch (Exception e) {
+            display.clearForPageSwitch("msg-fallback");
+            KindleUtils.exec("eips", "0", "8", "MESSAGE");
+            KindleUtils.exec("eips", "0", "10", text);
+            logFile("MSG render fallback: " + e.getMessage());
+        }
+    }
+
+    static void renderMessageImage(String text, String targetFile) throws IOException {
+        final int width = 600;
+        final int height = 800;
+
+        BufferedImage img = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+        Graphics2D g = img.createGraphics();
+        g.setColor(Color.WHITE);
+        g.fillRect(0, 0, width, height);
+        g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
+
+        g.setColor(Color.BLACK);
+        g.setFont(new Font("Dialog", Font.BOLD, 34));
+        g.drawString("Incoming Message", 90, 110);
+
+        Font funny = new Font("Comic Sans MS", Font.BOLD, 52);
+        if (!"Comic Sans MS".equalsIgnoreCase(funny.getFamily())) {
+            funny = new Font("Dialog", Font.BOLD, 52);
+        }
+        g.setFont(funny);
+
+        List<String> lines = wrapForWidth(g, text, width - 80);
+        int y = 250;
+        FontMetrics fm = g.getFontMetrics();
+        int lineHeight = fm.getHeight() + 12;
+        for (String line : lines) {
+            int lineW = fm.stringWidth(line);
+            int x = Math.max(20, (width - lineW) / 2);
+            g.drawString(line, x, y);
+            y += lineHeight;
+            if (y > height - 120) {
+                break;
+            }
+        }
+
+        g.setFont(new Font("Dialog", Font.PLAIN, 20));
+        g.drawString("Visible for 20 seconds", 185, height - 60);
+        g.dispose();
+
+        ImageIO.write(img, "png", new File(targetFile));
+    }
+
+    static List<String> wrapForWidth(Graphics2D g, String text, int maxWidth) {
+        List<String> lines = new ArrayList<>();
+        if (text == null || text.trim().isEmpty()) {
+            lines.add("(empty)");
+            return lines;
+        }
+
+        FontMetrics fm = g.getFontMetrics();
+        String[] words = text.trim().split("\\s+");
+        StringBuilder line = new StringBuilder();
+        for (String word : words) {
+            String candidate = line.length() == 0 ? word : line + " " + word;
+            if (fm.stringWidth(candidate) <= maxWidth) {
+                line.setLength(0);
+                line.append(candidate);
+                continue;
+            }
+            if (line.length() > 0) {
+                lines.add(line.toString());
+                line.setLength(0);
+                line.append(word);
+            } else {
+                lines.add(word);
+            }
+        }
+        if (line.length() > 0) {
+            lines.add(line.toString());
+        }
+        return lines;
     }
 
     // =========================================================================

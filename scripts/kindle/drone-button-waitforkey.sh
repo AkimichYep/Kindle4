@@ -11,12 +11,35 @@ APP_JAR="${APP_JAR:-/mnt/us/drone-app-1.0.0-SNAPSHOT.jar}"
 JAVA_BIN="${JAVA_BIN:-/mnt/us/java/jre/bin/java}"
 APP_LOG="${APP_LOG:-/mnt/us/drone-app.log}"
 LISTENER_LOG="${LISTENER_LOG:-/mnt/us/drone-button-waitforkey.log}"
+IPTABLES_BIN="${IPTABLES_BIN:-/usr/sbin/iptables}"
+IPTABLES_SAVE_BIN="${IPTABLES_SAVE_BIN:-/usr/sbin/iptables-save}"
+LISTENER_PORT="${LISTENER_PORT:-5555}"
 
 log() {
   echo "$(date): $*" >> "$LISTENER_LOG"
 }
 
+ensure_firewall_rule() {
+  if [ ! -x "$IPTABLES_BIN" ] || [ ! -x "$IPTABLES_SAVE_BIN" ]; then
+    log "iptables tools missing, skip firewall open"
+    return 0
+  fi
+
+  if "$IPTABLES_SAVE_BIN" 2>/dev/null | grep -q -- "-A INPUT -i wlan0 -p tcp -m tcp --dport $LISTENER_PORT -j ACCEPT"; then
+    log "firewall rule already present for tcp/$LISTENER_PORT"
+    return 0
+  fi
+
+  if "$IPTABLES_BIN" -I INPUT 1 -i wlan0 -p tcp -m tcp --dport "$LISTENER_PORT" -j ACCEPT; then
+    log "firewall rule added for tcp/$LISTENER_PORT"
+  else
+    log "failed to add firewall rule for tcp/$LISTENER_PORT"
+  fi
+}
+
 start_app() {
+  ensure_firewall_rule
+
   if pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
     log "start ignored (already running)"
     return 0
