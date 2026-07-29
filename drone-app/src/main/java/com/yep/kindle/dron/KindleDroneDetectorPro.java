@@ -69,16 +69,18 @@ public class KindleDroneDetectorPro {
     static final int PAGE_WEATHER  = 0;
     static final int PAGE_MOON     = 1;
     static final int PAGE_SPACE    = 2;
-    static final int PAGE_RADAR    = 3;
-    static final int PAGE_COUNT    = 4;
+    static final int PAGE_TEMP     = 3;
+    static final int PAGE_RADAR    = 4;
+    static final int PAGE_COUNT    = 5;
 
     static final String[] PAGE_FILES = {
         "/mnt/us/weather.png",
         "/mnt/us/moon.png",
         "/mnt/us/spaceweather.png",
+        "/mnt/us/hometemp.png",
         RadarRenderer.IMAGE_FILE          // /mnt/us/radar.png
     };
-    static final String[] PAGE_NAMES = { "weather", "moon", "space", "radar" };
+    static final String[] PAGE_NAMES = { "weather", "moon", "space", "hometemp", "radar" };
 
     // ── Misc thresholds ───────────────────────────────────────────────────────
     static final int  IDLE_CRC_THRESHOLD = 6;
@@ -371,6 +373,11 @@ public class KindleDroneDetectorPro {
                 showPngOrFallback(PAGE_FILES[PAGE_SPACE], ctx, display);
                 break;
 
+            case PAGE_TEMP:
+                generateInfoImage(PAGE_TEMP, ctx);
+                showPngOrFallback(PAGE_FILES[PAGE_TEMP], ctx, display);
+                break;
+
             case PAGE_RADAR:
                 showRadarPage(ctx, display, firstRun, radarMgr);
                 break;
@@ -470,6 +477,9 @@ public class KindleDroneDetectorPro {
                     break;
                 case PAGE_SPACE:
                     KindleSpaceWeatherNoKey.generateAndSave(PAGE_FILES[PAGE_SPACE]);
+                    break;
+                case PAGE_TEMP:
+                    KindleHomeTemp.generateAndSave(PAGE_FILES[PAGE_TEMP]);
                     break;
                 default:
                     break;
