@@ -10,20 +10,25 @@ APP_JAR="${APP_JAR:-/mnt/us/drone-app-1.0.0-SNAPSHOT.jar}"
 JAVA_BIN="${JAVA_BIN:-/mnt/us/java/jre/bin/java}"
 APP_LOG="${APP_LOG:-/mnt/us/drone-app.log}"
 LISTENER_LOG="${LISTENER_LOG:-/mnt/us/drone-button-evdev.log}"
+START_SCRIPT="${START_SCRIPT:-/mnt/us/drone-start.sh}"
+TZ_FILE="${TZ_FILE:-/var/local/system/tz}"
+DEFAULT_TZ="${DEFAULT_TZ:-EET-2EEST,M3.5.0/3,M10.5.0/4}"
+
+if [ -z "$TZ" ]; then
+  if [ -s "$TZ_FILE" ]; then
+    TZ="$(cat "$TZ_FILE" 2>/dev/null)"
+  else
+    TZ="$DEFAULT_TZ"
+  fi
+  export TZ
+fi
 
 log() {
   echo "$(date): $*" >> "$LISTENER_LOG"
 }
 
 start_app() {
-  if pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
-    log "start ignored (already running)"
-    return 0
-  fi
-
-  "$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$APP_LOG" 2>&1 &
-  sleep 1
-
+  sh "$START_SCRIPT"
   if pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
     log "app started"
   else

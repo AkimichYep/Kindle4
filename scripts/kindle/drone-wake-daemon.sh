@@ -5,6 +5,17 @@ START_SCRIPT="${START_SCRIPT:-/mnt/us/drone-start.sh}"
 LOG_FILE="${LOG_FILE:-/mnt/us/drone-wake-daemon.log}"
 DAEMON_LOCK_DIR="${DAEMON_LOCK_DIR:-/mnt/us/drone-wake.lock}"
 DAEMON_LOCK_PID_FILE="$DAEMON_LOCK_DIR/pid"
+TZ_FILE="${TZ_FILE:-/var/local/system/tz}"
+DEFAULT_TZ="${DEFAULT_TZ:-EET-2EEST,M3.5.0/3,M10.5.0/4}"
+
+if [ -z "$TZ" ]; then
+  if [ -s "$TZ_FILE" ]; then
+    TZ="$(cat "$TZ_FILE" 2>/dev/null)"
+  else
+    TZ="$DEFAULT_TZ"
+  fi
+  export TZ
+fi
 
 is_alive() {
   [ -n "$1" ] && kill -0 "$1" 2>/dev/null

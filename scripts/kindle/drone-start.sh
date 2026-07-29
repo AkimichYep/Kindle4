@@ -7,6 +7,34 @@ LOG_FILE="${LOG_FILE:-/mnt/us/drone-app.log}"
 APP_PID_FILE="${APP_PID_FILE:-/mnt/us/drone-app.pid}"
 LOCK_DIR="${LOCK_DIR:-/mnt/us/drone-app.lock}"
 LOCK_PID_FILE="$LOCK_DIR/pid"
+TZ_FILE="${TZ_FILE:-/var/local/system/tz}"
+ETC_TZ_FILE="${ETC_TZ_FILE:-/etc/TZ}"
+DEFAULT_TZ="${DEFAULT_TZ:-EET-2EEST,M3.5.0/3,M10.5.0/4}"
+
+resolve_tz() {
+  if [ -n "$TZ" ]; then
+    echo "$TZ"
+    return
+  fi
+
+  if [ -s "$TZ_FILE" ]; then
+    cat "$TZ_FILE" 2>/dev/null
+    return
+  fi
+
+  echo "$DEFAULT_TZ"
+}
+
+export TZ="$(resolve_tz)"
+
+# Keep Kindle timezone files aligned when storage is writable.
+if [ -w "$TZ_FILE" ] && [ "$(cat "$TZ_FILE" 2>/dev/null)" != "$TZ" ]; then
+  echo "$TZ" > "$TZ_FILE" 2>/dev/null || true
+fi
+
+if [ -w "$ETC_TZ_FILE" ] && [ "$(cat "$ETC_TZ_FILE" 2>/dev/null)" != "$TZ" ]; then
+  echo "$TZ" > "$ETC_TZ_FILE" 2>/dev/null || true
+fi
 
 is_alive() {
   [ -n "$1" ] && kill -0 "$1" 2>/dev/null
@@ -48,6 +76,10 @@ else
   fi
 fi
 
+rdate -s time.nist.gov >> "$LOG_FILE" 2>&1 || true
+if command -v hwclock >/dev/null 2>&1; then
+  hwclock -w >> "$LOG_FILE" 2>&1 || true
+fi
 "$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$LOG_FILE" 2>&1 &
 NEW_PID=$!
 sleep 1

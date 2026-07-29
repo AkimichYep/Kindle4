@@ -17,9 +17,11 @@ import java.time.LocalDateTime;
 public class KindleTcpListener {
     private static final int PORT = 5555;
     private static final long DEFAULT_OVERLAY_MS = 20_000L;
+    private static final String CONTROL_NEXT_REFRESH = "/control/next-refresh";
     private static volatile String lastMessage = "Waiting for message...";
     private static volatile OverlayState overlayState = null;
     private static volatile long overlaySeq = 0;
+    private static volatile long refreshAndNextSeq = 0;
     private static volatile boolean started = false;
 
     public static final class OverlaySnapshot {
@@ -85,6 +87,14 @@ public class KindleTcpListener {
         return id;
     }
 
+    public static synchronized long requestRefreshAndNextPage() {
+        return ++refreshAndNextSeq;
+    }
+
+    public static long getRefreshAndNextPageSeq() {
+        return refreshAndNextSeq;
+    }
+
     private static void runLoop() {
         System.out.println("=== Kindle TCP Drone Listener Active on port " + PORT + " ===");
         try {
@@ -120,6 +130,13 @@ public class KindleTcpListener {
                 return;
             }
 
+            if (pathEquals(path, CONTROL_NEXT_REFRESH) || pathStartsWith(path, CONTROL_NEXT_REFRESH + "?")) {
+                long seq = requestRefreshAndNextPage();
+                byte[] body = ("queued refresh+next seq=" + seq).getBytes(StandardCharsets.UTF_8);
+                sendHttpResponse(clientSocket.getOutputStream(), "200 OK", "text/plain; charset=UTF-8", body);
+                return;
+            }
+
             // Serve weather icon font so the browser can render a weather-style header icon.
             if (path.startsWith("/font/")) {
                 serveResource(clientSocket.getOutputStream(), path.substring(1));
@@ -138,10 +155,24 @@ public class KindleTcpListener {
         }
 
         String parsed = parseTcpMessage(firstLine);
+        if (isRefreshAndNextCommand(parsed)) {
+            requestRefreshAndNextPage();
+            return;
+        }
         if (parsed != null && !parsed.trim().isEmpty()) {
             publishOverlayMessage(parsed, DEFAULT_OVERLAY_MS);
             logMessage("TCP", lastMessage);
         }
+    }
+
+    private static boolean isRefreshAndNextCommand(String parsed) {
+        if (parsed == null) {
+            return false;
+        }
+        String normalized = parsed.trim().toLowerCase();
+        return "cmd:next-refresh".equals(normalized)
+                || "next-refresh".equals(normalized)
+                || "refresh-next".equals(normalized);
     }
 
     private static boolean isHttpRequestLine(String line) {
@@ -155,6 +186,14 @@ public class KindleTcpListener {
             return "/";
         }
         return parts[1];
+    }
+
+    private static boolean pathEquals(String path, String target) {
+        return target.equals(path);
+    }
+
+    private static boolean pathStartsWith(String path, String prefix) {
+        return path != null && path.startsWith(prefix);
     }
 
     private static String extractMessageFromPath(String path) {

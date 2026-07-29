@@ -178,6 +178,7 @@ public class KindleDroneDetectorPro {
 
         boolean listenerStarted = KindleTcpListener.startAsync();
         logFile(listenerStarted ? "TCP listener started on :5555" : "TCP listener already running");
+        long handledRefreshAndNextSeq = KindleTcpListener.getRefreshAndNextPageSeq();
 
         // ── Scan / alert state ────────────────────────────────────────────────
         boolean emergencyActive = false;
@@ -274,6 +275,24 @@ public class KindleDroneDetectorPro {
                 WeatherService.WeatherData latest = WeatherService.fetchWeather(WEATHER_LOCATION);
                 ctx.weather = latest;
                 logFile(latest.error == null ? "WX:" + latest.temp + "C" : "WX ERR");
+            }
+
+            long refreshAndNextSeq = KindleTcpListener.getRefreshAndNextPageSeq();
+            if (refreshAndNextSeq != handledRefreshAndNextSeq) {
+                handledRefreshAndNextSeq = refreshAndNextSeq;
+                lastWeatherFetchAt = runManualRefresh(ctx, firstRun);
+
+                currentPage = (currentPage + 1) % PAGE_COUNT;
+                pageShownAt = System.currentTimeMillis();
+                generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+                logFile("BTN PAGE->" + PAGE_NAMES[currentPage] + " (manual refresh)");
+
+                if (currentPage == PAGE_RADAR) {
+                    currentPage = PAGE_WEATHER;
+                    pageShownAt = System.currentTimeMillis();
+                    generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+                    logFile("BTN PAGE->weather (post-radar)");
+                }
             }
 
             // ── Firmware stats ─────────────────────────────────────────────────
@@ -385,6 +404,43 @@ public class KindleDroneDetectorPro {
             default:
                 break;
         }
+    }
+
+    static long runManualRefresh(DetectorContext ctx, boolean firstRun) {
+        try {
+            WeatherService.WeatherData latest = WeatherService.fetchWeather(WEATHER_LOCATION);
+            ctx.weather = latest;
+            logFile(latest.error == null ? "WX manual:" + latest.temp + "C" : "WX manual ERR");
+
+            WifiScanner.sendProbe("manual");
+            List<AP> aps = WifiScanner.scan();
+            TemporalEngine temporal = ctx.temporal;
+            temporal.update(aps, ctx.armed, ctx.baseline);
+            updateKnownNets(aps, ctx);
+
+            int[] procResult = WifiScanner.readProcWireless();
+            if (procResult != null) {
+                ctx.linkQuality = procResult[0];
+                ctx.noiseFloor  = procResult[2];
+                ctx.csSnr       = procResult[1] - procResult[2];
+            }
+
+            ctx.scorer.score(aps, ctx.armed, ctx.baseline, ctx.knownNets);
+            int maxThreat = 0;
+            for (AP ap : aps) {
+                if (ap.threat > maxThreat) {
+                    maxThreat = ap.threat;
+                }
+            }
+            if (maxThreat > ctx.statPeakThreat) {
+                ctx.statPeakThreat = maxThreat;
+            }
+            logFile("MANUAL scan aps=" + aps.size() + " thr=" + maxThreat + (firstRun ? " FIRST_RUN" : ""));
+        } catch (Exception e) {
+            logFile("MANUAL refresh err=" + e.getMessage());
+        }
+
+        return System.currentTimeMillis();
     }
 
     /**

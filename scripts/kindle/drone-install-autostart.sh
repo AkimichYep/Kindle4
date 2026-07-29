@@ -6,6 +6,9 @@ DAEMON_SCRIPT="${DAEMON_SCRIPT:-/mnt/us/drone-wake-daemon.sh}"
 RC_LOCAL="/etc/rc.local"
 INITD_SCRIPT="/etc/init.d/drone-wake"
 RC5_LINK="/etc/rc5.d/S99drone-wake"
+TZ_VALUE="${TZ_VALUE:-EET-2EEST,M3.5.0/3,M10.5.0/4}"
+KINDLE_TZ_FILE="/var/local/system/tz"
+ETC_TZ_FILE="/etc/TZ"
 
 ensure_writable_rootfs() {
   if command -v mntroot >/dev/null 2>&1; then
@@ -16,6 +19,13 @@ ensure_writable_rootfs() {
 restore_readonly_rootfs() {
   if command -v mntroot >/dev/null 2>&1; then
     mntroot ro >/dev/null 2>&1
+  fi
+}
+
+configure_timezone() {
+  echo "$TZ_VALUE" > "$KINDLE_TZ_FILE" 2>/dev/null || true
+  if [ -w "$ETC_TZ_FILE" ] || [ ! -e "$ETC_TZ_FILE" ]; then
+    echo "$TZ_VALUE" > "$ETC_TZ_FILE" 2>/dev/null || true
   fi
 }
 
@@ -54,6 +64,7 @@ EOF
 }
 
 ensure_writable_rootfs
+configure_timezone
 if install_rc_local; then
   echo "Installed boot hook in $RC_LOCAL"
 else
