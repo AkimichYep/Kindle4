@@ -29,13 +29,15 @@ import java.util.*;
 public class KindleHomeTemp {
 
     static final String SENSOR_PATH  = "/sys/bus/i2c/devices/1-0048/papyrus_temperature";
-    static final String CSV_PATH     = "/mnt/us/hometemp.csv";
+    static String CSV_PATH = "/mnt/us/hometemp.csv"; // overrideable via setCsvPath()
     static final int    HISTORY_DAYS = 28; // 4 weeks
 
     private static final DateTimeFormatter TIME_FMT  = DateTimeFormatter.ofPattern("HH:mm");
     private static final DateTimeFormatter DATE_DISP = DateTimeFormatter.ofPattern("EEE, dd MMM", Locale.ENGLISH);
     private static final DateTimeFormatter DATE_CSV  = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final DateTimeFormatter DATE_AXIS = DateTimeFormatter.ofPattern("dd/MM");
+
+    public static void setCsvPath(String path) { CSV_PATH = path; }
 
     // One record per calendar day; loaded once, then updated in-memory + saved after each reading
     private static final Map<LocalDate, DayRecord> dayData = new LinkedHashMap<>();

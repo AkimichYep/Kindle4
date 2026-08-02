@@ -47,15 +47,15 @@ public class RadarRenderer {
 
     // ── Output files ─────────────────────────────────────────────────────────
     // Current (latest) frame — also the target for eips -g on first show.
-    public static final String IMAGE_FILE = "/mnt/us/radar.png";
-    static final String IMAGE_TMP  = "/mnt/us/radar.png.tmp";
+    public static final String IMAGE_FILE = "/mnt/us/drone-app/img/radar.png";
+    static final String IMAGE_TMP  = "/mnt/us/drone-app/img/radar.png.tmp";
 
     // Ring-buffer of the last 3 rendered frames for Kindle animation.
     public static final int    FRAME_COUNT = 3;
     public static final String[] FRAME_FILES = {
-        "/mnt/us/radar0.png",
-        "/mnt/us/radar1.png",
-        "/mnt/us/radar2.png"
+        "/mnt/us/drone-app/img/radar0.png",
+        "/mnt/us/drone-app/img/radar1.png",
+        "/mnt/us/drone-app/img/radar2.png"
     };
     // Index of the slot that will be written on the *next* render() call.
     public static int nextFrame = 0;

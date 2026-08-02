@@ -24,6 +24,9 @@ import com.yep.kindle.dron.service.WeatherService;
 import com.yep.kindle.dron.service.WifiScanner;
 import com.yep.kindle.dron.tool.KindleTcpListener;
 import com.yep.kindle.dron.util.KindleUtils;
+import com.yep.kindle.dron.web.AppDataManager;
+import com.yep.kindle.dron.web.DeviceState;
+import com.yep.kindle.dron.web.KindleWebServer;
 
 /**
  * KindleDroneDetectorPro v2.5 — power-saving edition with fixed display rotation.
@@ -74,11 +77,11 @@ public class KindleDroneDetectorPro {
     static final int PAGE_COUNT    = 5;
 
     static final String[] PAGE_FILES = {
-        "/mnt/us/weather.png",
-        "/mnt/us/moon.png",
-        "/mnt/us/spaceweather.png",
-        "/mnt/us/hometemp.png",
-        RadarRenderer.IMAGE_FILE          // /mnt/us/radar.png
+        "/mnt/us/drone-app/img/weather.png",
+        "/mnt/us/drone-app/img/moon.png",
+        "/mnt/us/drone-app/img/spaceweather.png",
+        "/mnt/us/drone-app/img/hometemp.png",
+        RadarRenderer.IMAGE_FILE          // /mnt/us/drone-app/img/radar.png
     };
     static final String[] PAGE_NAMES = { "weather", "moon", "space", "hometemp", "radar" };
 
@@ -100,10 +103,11 @@ public class KindleDroneDetectorPro {
     static final int  BLINK_DELAY_MS   = 300;
 
     // ── File paths ────────────────────────────────────────────────────────────
-    static final String LOG_FILE = "/mnt/us/drone_log.txt";
-    static final String CSV_FILE = "/mnt/us/drone_nets.csv";
-    static final String CSV_TMP  = "/mnt/us/drone_nets.csv.tmp";
-    static final String MESSAGE_FILE = "/mnt/us/message.png";
+    static final String APP_DIR      = "/mnt/us/drone-app";
+    static final String LOG_FILE     = APP_DIR + "/logs/drone.log";
+    static final String CSV_FILE     = APP_DIR + "/data/drone_nets.csv";
+    static final String CSV_TMP      = APP_DIR + "/data/drone_nets.csv.tmp";
+    static final String MESSAGE_FILE = APP_DIR + "/img/message.png";
 
     // ── Logging controls ──────────────────────────────────────────────────────
     static final long LOG_MAX_BYTES    = 256 * 1024;
@@ -136,15 +140,39 @@ public class KindleDroneDetectorPro {
                 temporal, scorer, knownNets, baseline);
         ctx.startTime = System.currentTimeMillis();
 
-        DisplayManager    display  = new DisplayManager();
-        RadarImageManager radarMgr = new RadarImageManager(KindleDroneDetectorPro::logFile);
+        DisplayManager    display   = new DisplayManager();
+        RadarImageManager radarMgr  = new RadarImageManager(KindleDroneDetectorPro::logFile);
+
+        // ── Web server / shared state ─────────────────────────────────────────
+        DeviceState    webState   = new DeviceState();
+        KindleWebServer webServer = null;
+        AppDataManager dataManager;
+
+        // Ensure folder structure exists before anything writes to it
+        dataManager = new AppDataManager(APP_DIR);
+        webState.setDataManager(dataManager);
+        KindleHomeTemp.setCsvPath(dataManager.getHomeTempCsvFile().getAbsolutePath());
+
+        try {
+            webServer = new KindleWebServer(webState);
+            webServer.start();
+        } catch (Exception e) {
+            System.err.println("Web server failed to start: " + e.getMessage());
+            webServer = null;
+        }
+
+        final KindleWebServer webServerFinal = webServer;
+        final DeviceState     webStateFinal  = webState;
+        final AppDataManager  dataManagerFinal = dataManager;
 
         // ── Startup ───────────────────────────────────────────────────────────
         KindleUtils.exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "1");
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            saveNetworksCsv(knownNets);
+            if (webServerFinal != null) webServerFinal.stop();
+            saveNetworksCsv(knownNets, dataManagerFinal);
+            try { dataManagerFinal.saveDeviceState(webStateFinal); } catch (Exception ignored) { }
             KindleUtils.exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "0");
-            System.out.println("Shutdown: CSV saved.");
+            System.out.println("Shutdown complete.");
         }));
 
         openLogFile();
@@ -178,7 +206,19 @@ public class KindleDroneDetectorPro {
 
         boolean listenerStarted = KindleTcpListener.startAsync();
         logFile(listenerStarted ? "TCP listener started on :5555" : "TCP listener already running");
-        long handledRefreshAndNextSeq = KindleTcpListener.getRefreshAndNextPageSeq();
+        long handledTcpSeq = KindleTcpListener.getRefreshAndNextPageSeq();
+        long handledWebPageSeq  = 0;
+        long lastShownMsgSeq    = 0;
+        long msgShownAt         = 0;
+        int  saveCounter        = 0;
+
+        // Set initial welcome status visible in web UI
+        try {
+            java.net.InetAddress ia = java.net.InetAddress.getLocalHost();
+            webState.setStatusMessage("Ready — http://" + ia.getHostAddress() + ":8080");
+        } catch (Exception e) {
+            webState.setStatusMessage("Ready — port 8080");
+        }
 
         // ── Scan / alert state ────────────────────────────────────────────────
         boolean emergencyActive = false;
@@ -277,22 +317,23 @@ public class KindleDroneDetectorPro {
                 logFile(latest.error == null ? "WX:" + latest.temp + "C" : "WX ERR");
             }
 
-            long refreshAndNextSeq = KindleTcpListener.getRefreshAndNextPageSeq();
-            if (refreshAndNextSeq != handledRefreshAndNextSeq) {
-                handledRefreshAndNextSeq = refreshAndNextSeq;
+            // ── Page-advance from physical button (TCP :5555) ─────────────────
+            long tcpSeq = KindleTcpListener.getRefreshAndNextPageSeq();
+            if (tcpSeq != handledTcpSeq) {
+                handledTcpSeq = tcpSeq;
                 lastWeatherFetchAt = runManualRefresh(ctx, firstRun);
-
-                currentPage = (currentPage + 1) % PAGE_COUNT;
+                currentPage = advancePage(currentPage, ctx, display, firstRun, radarMgr, "BTN");
                 pageShownAt = System.currentTimeMillis();
-                generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-                logFile("BTN PAGE->" + PAGE_NAMES[currentPage] + " (manual refresh)");
+            }
 
-                if (currentPage == PAGE_RADAR) {
-                    currentPage = PAGE_WEATHER;
-                    pageShownAt = System.currentTimeMillis();
-                    generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-                    logFile("BTN PAGE->weather (post-radar)");
-                }
+            // ── Page-advance from web UI ───────────────────────────────────────
+            long webPageSeq = webState.getNextPageSeq();
+            if (webPageSeq != handledWebPageSeq) {
+                handledWebPageSeq = webPageSeq;
+                webState.acknowledgePageRequest();
+                lastWeatherFetchAt = runManualRefresh(ctx, firstRun);
+                currentPage = advancePage(currentPage, ctx, display, firstRun, radarMgr, "WEB");
+                pageShownAt = System.currentTimeMillis();
             }
 
             // ── Firmware stats ─────────────────────────────────────────────────
@@ -317,17 +358,45 @@ public class KindleDroneDetectorPro {
                 ctx.crcDelta = 0;
             }
 
-            // ── Page rotation ─────────────────────────────────────────────────
-            KindleTcpListener.OverlaySnapshot overlay = KindleTcpListener.getActiveOverlay();
-            if (overlay != null) {
-                if (!overlayVisible || shownOverlayId != overlay.id) {
-                    showOverlayMessage(display, overlay.message);
-                    shownOverlayId = overlay.id;
-                    overlayVisible = true;
-                    logFile("MSG shown id=" + overlay.id);
+            // ── Update web-server state (battery, temp, status) ──────────────
+            updateWebState(webState, ctx);
+            saveCounter++;
+            if (saveCounter >= SAVE_EVERY) {
+                saveCounter = 0;
+                saveNetworksCsv(knownNets, dataManager);
+                try { dataManager.saveDeviceState(webState); } catch (Exception e) { logFile("state-save: " + e.getMessage()); }
+            }
+
+            // ── Overlay messages — web UI takes priority over TCP listener ────
+            long webMsgSeq = webState.getMessageSeq();
+            if (webMsgSeq > lastShownMsgSeq) {
+                lastShownMsgSeq = webMsgSeq;
+                showOverlayMessage(display, webState.getLastMessage());
+                msgShownAt = System.currentTimeMillis();
+                overlayVisible = true;
+                logFile("WEB-MSG seq=" + webMsgSeq);
+            } else {
+                KindleTcpListener.OverlaySnapshot overlay = KindleTcpListener.getActiveOverlay();
+                if (overlay != null) {
+                    if (!overlayVisible || shownOverlayId != overlay.id) {
+                        showOverlayMessage(display, overlay.message);
+                        shownOverlayId = overlay.id;
+                        msgShownAt = System.currentTimeMillis();
+                        overlayVisible = true;
+                        logFile("TCP-MSG id=" + overlay.id);
+                    }
                 }
-            } else if (overlayVisible) {
+            }
+
+            // Auto-dismiss overlay after MESSAGE_HOLD_MS
+            if (overlayVisible && System.currentTimeMillis() - msgShownAt >= MESSAGE_HOLD_MS) {
                 overlayVisible = false;
+                shownOverlayId = -1;
+                pageShownAt = System.currentTimeMillis();
+                generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
+                logFile("MSG-TIMEOUT -> PAGE->" + PAGE_NAMES[currentPage]);
+            } else if (!overlayVisible && KindleTcpListener.getActiveOverlay() == null && shownOverlayId != -1) {
+                // TCP overlay was cleared externally
                 shownOverlayId = -1;
                 pageShownAt = System.currentTimeMillis();
                 generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
@@ -353,10 +422,7 @@ public class KindleDroneDetectorPro {
                 }
             }
 
-            // ── Periodic CSV save ──────────────────────────────────────────────
-            if (ctx.loop % SAVE_EVERY == 0 && ctx.armed) {
-                saveNetworksCsv(knownNets);
-            }
+            // CSV + state save is handled in the web-state update block above
 
             if (ctx.loop % LOG_ROTATE_EVERY == 0) rotateLogIfNeeded();
 
@@ -676,6 +742,48 @@ public class KindleDroneDetectorPro {
 
     static void saveNetworksCsv(Map<String, NetRecord> knownNets) {
         NetCsvStore.save(CSV_TMP, CSV_FILE, knownNets, KindleDroneDetectorPro::logFile);
+    }
+
+    static void saveNetworksCsv(Map<String, NetRecord> knownNets, AppDataManager dm) {
+        if (dm != null) {
+            NetCsvStore.save(dm.getCsvTempFile().getAbsolutePath(),
+                             dm.getCsvFile().getAbsolutePath(),
+                             knownNets, KindleDroneDetectorPro::logFile);
+        } else {
+            saveNetworksCsv(knownNets);
+        }
+    }
+
+    /**
+     * Advance to the next display page, skip radar directly back to weather.
+     * Returns the new currentPage value.
+     */
+    static int advancePage(int current, DetectorContext ctx, DisplayManager display,
+                           boolean firstRun, RadarImageManager radarMgr, String src) {
+        current = (current + 1) % PAGE_COUNT;
+        generateAndShowPage(current, ctx, display, firstRun, radarMgr);
+        logFile(src + " PAGE->" + PAGE_NAMES[current]);
+        if (current == PAGE_RADAR) {
+            current = PAGE_WEATHER;
+            generateAndShowPage(current, ctx, display, firstRun, radarMgr);
+            logFile(src + " PAGE->weather (post-radar)");
+        }
+        return current;
+    }
+
+    /**
+     * Push current detector state into DeviceState so the web UI sees fresh values.
+     * Reads real battery from sysfs when available; falls back to runtime estimation.
+     */
+    static void updateWebState(DeviceState ws, DetectorContext ctx) {
+        if (ws == null || ctx == null) return;
+        // Battery and temperature are read fresh by SensorReader on each web request.
+        // Only push detector status here.
+        int apCount = ctx.knownNets.size();
+        String threat = ctx.statPeakThreat >= 60 ? "DRONE DETECTED!" :
+                        ctx.statPeakThreat >= 30 ? "Suspicious"      : "Clear";
+        ws.setStatusMessage(String.format("APs:%d  Threat:%s(%d)  Loop:%d",
+                apCount, threat, ctx.statPeakThreat, ctx.loop));
     }
 
     // =========================================================================

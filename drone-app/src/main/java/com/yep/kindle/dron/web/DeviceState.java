@@ -1,0 +1,64 @@
+package com.yep.kindle.dron.web;
+
+/**
+ * Thread-safe shared state between the detector main loop and the web server.
+ * Battery and temperature are NOT stored here — they are read fresh from hardware
+ * by SensorReader at the time each web request is served.
+ */
+public class DeviceState {
+
+    private volatile String lastMessage      = "";
+    private volatile long   lastMessageTime  = System.currentTimeMillis();
+    private volatile long   messageSeq       = 0;
+    private volatile String statusMessage    = "Ready";
+    private volatile long   nextPageSeq      = 0;
+    private volatile long   nextPageAckedSeq = 0;
+
+    private AppDataManager dataManager = null;
+
+    // ── Messages (trigger overlay on Kindle screen) ───────────────────────────
+
+    public synchronized String getLastMessage()    { return lastMessage; }
+    public synchronized long   getLastMessageTime(){ return lastMessageTime; }
+    public synchronized long   getMessageSeq()     { return messageSeq; }
+
+    public synchronized void setMessage(String message) {
+        if (message != null && !message.trim().isEmpty()) {
+            lastMessage     = message.trim();
+            lastMessageTime = System.currentTimeMillis();
+            messageSeq++;
+        }
+    }
+
+    // ── Status line (web dashboard only, no screen overlay) ──────────────────
+
+    public synchronized String getStatusMessage() { return statusMessage; }
+
+    public synchronized void setStatusMessage(String status) {
+        if (status != null && !status.trim().isEmpty()) {
+            statusMessage = status.trim();
+        }
+    }
+
+    // ── Page navigation ───────────────────────────────────────────────────────
+
+    public synchronized long getNextPageSeq() { return nextPageSeq; }
+
+    public synchronized long requestNextPage() {
+        nextPageSeq++;
+        return nextPageSeq;
+    }
+
+    public synchronized boolean hasPendingPageRequest() {
+        return nextPageAckedSeq < nextPageSeq;
+    }
+
+    public synchronized void acknowledgePageRequest() {
+        nextPageAckedSeq = nextPageSeq;
+    }
+
+    // ── AppDataManager reference ──────────────────────────────────────────────
+
+    public AppDataManager getDataManager() { return dataManager; }
+    public void setDataManager(AppDataManager manager) { this.dataManager = manager; }
+}

@@ -5,6 +5,33 @@ public class KindleUtils {
     public static final int ROWS = 40;
     public static final int COLS = 50;
 
+    /**
+     * Executes a command and returns its trimmed stdout, or null on error.
+     * Stderr is silently drained in a daemon thread to prevent deadlock.
+     */
+    public static String readCommand(String... cmd) {
+        try {
+            Process p = Runtime.getRuntime().exec(cmd);
+            Thread errDrain = new Thread(() -> drain(p.getErrorStream()), "cmd-err-drain");
+            errDrain.setDaemon(true);
+            errDrain.start();
+            StringBuilder sb = new StringBuilder();
+            try (java.io.BufferedReader br = new java.io.BufferedReader(
+                    new java.io.InputStreamReader(p.getInputStream()))) {
+                String line;
+                while ((line = br.readLine()) != null) {
+                    if (sb.length() > 0) sb.append('\n');
+                    sb.append(line);
+                }
+            }
+            p.waitFor();
+            return sb.toString().trim();
+        } catch (Exception e) {
+            System.err.println("readCommand: " + e.getMessage());
+            return null;
+        }
+    }
+
     public static void exec(String... cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);
