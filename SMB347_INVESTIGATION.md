@@ -97,6 +97,35 @@ Current state: `battery_suspend_current = 0`, `battery_current = 21` (near-full 
 
 ---
 
+## Quick Reference — Force Load on Power Bank
+
+**Situation:** Kindle on power bank, battery not yet full, power bank stays on normally.
+**Problem:** At ~100% battery, charging current → ~0, total USB draw drops below power bank cutoff → auto-shutoff.
+**Workaround (manual):** Unplug and replug the power bank.
+
+**Preventive command — run before battery reaches ~85%:**
+
+```sh
+BATT=/sys/devices/system/yoshi_battery/yoshi_battery0
+cat $BATT/battery_capacity    # confirm current %
+cat $BATT/battery_current     # should be 150-200 mA while charging
+echo 500 > $BATT/battery_suspend_current   # limit charge, keep USB load up
+```
+
+**Restore default:**
+
+```sh
+echo 0 > $BATT/battery_suspend_current
+```
+
+> **Note:** `battery_suspend_current` is unverified — may be a fuel gauge threshold, not a real charge limiter.
+> Run the verification test below (at 60–70% battery) to confirm before relying on it.
+> **UPDATE:** Tested at 36% → 100% — power bank stayed on. Command appears to work.
+> Logic is now embedded in the app (see `KindleDroneDetectorPro.java` — PBANK keepalive block,
+> `SensorReader.writeBatterySuspendCurrent()`). App throttles at ≥85%, restores at <70%.
+
+---
+
 ## TODO: Verification Test Needed
 
 Must be run with battery at **60–70%** and **USB actively plugged in** (baseline ~190mA):

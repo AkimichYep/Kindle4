@@ -111,6 +111,19 @@ public class KindleDroneDetectorPro {
     static final String CSV_TMP      = APP_DIR + "/data/drone_nets.csv.tmp";
     static final String MESSAGE_FILE = APP_DIR + "/img/message.png";
 
+    // ── Power bank keepalive ──────────────────────────────────────────────────
+    /**
+     * When battery is above this threshold and USB is charging, cap charge current
+     * so the power bank always sees enough load to stay on.
+     */
+    static final int  PBANK_THROTTLE_ABOVE_PCT  = 85;
+    /** Resume full charging once battery drops back below this threshold. */
+    static final int  PBANK_RESTORE_BELOW_PCT   = 70;
+    /** Value written to battery_suspend_current to cap charging (mA). */
+    static final int  PBANK_LIMIT_MA            = 500;
+    /** How often to check / re-apply the keepalive (every N loops = N × 5 s). */
+    static final int  PBANK_CHECK_EVERY         = 12 * 100;  // 60 s * 100
+
     // ── Logging controls ──────────────────────────────────────────────────────
     static final long LOG_MAX_BYTES    = 256 * 1024;
     static final int  DUMP_THREAT_MIN  = 60;
@@ -226,6 +239,7 @@ public class KindleDroneDetectorPro {
         boolean emergencyActive = false;
         long shownOverlayId = -1;
         boolean overlayVisible = false;
+        boolean pbankThrottleActive = false;
 
         // =========================================================================
         // Main loop
@@ -362,6 +376,34 @@ public class KindleDroneDetectorPro {
 
             // ── Update web-server state (battery, temp, status) ──────────────
             updateWebState(webState, ctx);
+
+            // ── Power bank keepalive ──────────────────────────────────────────
+            // Keeps USB load elevated so the power bank never auto-shuts off.
+            // When battery >= 85% and charging: cap charge current to 500 mA.
+            // When battery drops back to < 70%: restore normal charging.
+            if (ctx.loop % PBANK_CHECK_EVERY == 0) {
+                int batt = com.yep.kindle.dron.util.SensorReader.readBatteryPercent();
+                int isCharging = com.yep.kindle.dron.util.SensorReader.readIsCharging();
+                if (isCharging == 1) {
+                    if (!pbankThrottleActive && batt >= PBANK_THROTTLE_ABOVE_PCT) {
+                        boolean ok = com.yep.kindle.dron.util.SensorReader
+                                .writeBatterySuspendCurrent(PBANK_LIMIT_MA);
+                        pbankThrottleActive = ok;
+                        logFile("PBANK throttle ON batt=" + batt + "% ok=" + ok);
+                    } else if (pbankThrottleActive && batt < PBANK_RESTORE_BELOW_PCT) {
+                        boolean ok = com.yep.kindle.dron.util.SensorReader
+                                .writeBatterySuspendCurrent(0);
+                        if (ok) pbankThrottleActive = false;
+                        logFile("PBANK throttle OFF batt=" + batt + "% ok=" + ok);
+                    }
+                } else if (isCharging == 0 && pbankThrottleActive) {
+                    // USB unplugged — restore so next plug-in starts normal
+                    com.yep.kindle.dron.util.SensorReader.writeBatterySuspendCurrent(0);
+                    pbankThrottleActive = false;
+                    logFile("PBANK throttle OFF (USB removed)");
+                }
+            }
+
             saveCounter++;
             if (saveCounter >= SAVE_EVERY) {
                 saveCounter = 0;

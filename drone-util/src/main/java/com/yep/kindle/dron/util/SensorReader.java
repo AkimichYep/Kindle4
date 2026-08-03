@@ -2,6 +2,7 @@ package com.yep.kindle.dron.util;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
+import java.io.FileWriter;
 
 /**
  * Reads real hardware sensor values from a Kindle 4 device.
@@ -21,6 +22,8 @@ public class SensorReader {
         "/sys/devices/system/yoshi_battery/yoshi_battery0/battery_temperature";
     private static final String ROOM_TEMP_SYSFS =
         "/sys/bus/i2c/devices/1-0048/papyrus_temperature";
+    private static final String BATTERY_SUSPEND_CURRENT_SYSFS =
+        "/sys/devices/system/yoshi_battery/yoshi_battery0/battery_suspend_current";
 
     /** Battery charge 0-100. Returns -1 if unreadable. */
     public static int readBatteryPercent() {
@@ -85,6 +88,38 @@ public class SensorReader {
             return br.readLine();
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    // ── Power bank keepalive ──────────────────────────────────────────────────
+
+    /**
+     * Reads battery_current in mA from sysfs. Positive = charging, negative = discharging.
+     * Returns Integer.MIN_VALUE if unreadable.
+     */
+    public static int readBatteryCurrent() {
+        String raw = readSysfs(
+            "/sys/devices/system/yoshi_battery/yoshi_battery0/battery_current");
+        if (raw != null) {
+            try { return Integer.parseInt(raw.trim()); }
+            catch (NumberFormatException ignored) {}
+        }
+        return Integer.MIN_VALUE;
+    }
+
+    /**
+     * Writes battery_suspend_current to cap the charge current.
+     * Pass 500 to limit charging (~keep USB load up for power bank).
+     * Pass 0 to restore normal charging.
+     *
+     * @return true if the write succeeded
+     */
+    public static boolean writeBatterySuspendCurrent(int mA) {
+        try (FileWriter fw = new FileWriter(BATTERY_SUSPEND_CURRENT_SYSFS)) {
+            fw.write(String.valueOf(mA));
+            return true;
+        } catch (Exception e) {
+            return false;
         }
     }
 }
