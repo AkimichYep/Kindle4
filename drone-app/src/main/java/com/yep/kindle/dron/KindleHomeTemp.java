@@ -12,7 +12,8 @@ import java.awt.Graphics2D;
 import java.awt.image.BufferedImage;
 import java.io.*;
 import java.time.LocalDate;
-import java.time.LocalDateTime;
+import java.time.ZonedDateTime;
+import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
 
@@ -66,7 +67,7 @@ public class KindleHomeTemp {
     // ── Standalone preview (dev machine) ─────────────────────────────────────
 
     public static void main(String[] args) throws Exception {
-        LocalDate today = LocalDate.now();
+        LocalDate today = LocalDate.now(ZoneId.systemDefault());
         // Each entry: avg temp. 0 = missing day. Spread of ±3 °C added for min/max.
         int[] fakeAvgs = {
             19, 20,  0, 22, 23, 23, 24,   // week 1  (day 3 missing)
@@ -114,7 +115,7 @@ public class KindleHomeTemp {
 
     static void recordReading(int temp) {
         if (temp == -999) return;
-        dayData.computeIfAbsent(LocalDate.now(), k -> new DayRecord()).add(temp);
+        dayData.computeIfAbsent(LocalDate.now(ZoneId.systemDefault()), k -> new DayRecord()).add(temp);
     }
 
     // ── CSV persistence ───────────────────────────────────────────────────────
@@ -144,7 +145,7 @@ public class KindleHomeTemp {
 
     static void saveCsv() {
         // Prune old entries before writing
-        LocalDate cutoff = LocalDate.now().minusDays(HISTORY_DAYS + 5);
+        LocalDate cutoff = LocalDate.now(ZoneId.systemDefault()).minusDays(HISTORY_DAYS + 5);
         dayData.entrySet().removeIf(e -> e.getKey().isBefore(cutoff));
 
         File tmp = new File(CSV_PATH + ".tmp");
@@ -191,13 +192,13 @@ public class KindleHomeTemp {
         g.drawString(tempStr, (KindleCanvas.WIDTH - fm.stringWidth(tempStr)) / 2, 272);
 
         // ── Timestamp + today's min/max ───────────────────────────────────────
-        LocalDateTime now = LocalDateTime.now();
+        ZonedDateTime now = ZonedDateTime.now(ZoneId.systemDefault());
         String timeStr = "Updated: " + now.format(TIME_FMT) + "  " + now.format(DATE_DISP);
         g.setFont(new Font("SansSerif", Font.PLAIN, 19));
         fm = g.getFontMetrics();
         g.drawString(timeStr, (KindleCanvas.WIDTH - fm.stringWidth(timeStr)) / 2, 304);
 
-        DayRecord todayRec = dayData.get(LocalDate.now());
+        DayRecord todayRec = dayData.get(LocalDate.now(ZoneId.systemDefault()));
         if (todayRec != null && todayRec.count > 0) {
             String todayStr = "Today  ▼ " + todayRec.min + "°C  ▲ " + todayRec.max + "°C";
             g.setFont(new Font("SansSerif", Font.BOLD, 19));
@@ -253,7 +254,7 @@ public class KindleHomeTemp {
         final int CHART_TOP = yTop + 22;
         final int CHART_BTM = CHART_TOP + CHART_H;
 
-        LocalDate today    = LocalDate.now();
+        LocalDate today    = LocalDate.now(ZoneId.systemDefault());
         LocalDate winStart = today.minusDays(fromDaysAgo + numDays - 1);
         LocalDate winEnd   = today.minusDays(fromDaysAgo);
         boolean   isRecent = (fromDaysAgo == 0);

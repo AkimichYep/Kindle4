@@ -82,7 +82,7 @@ if command -v hwclock >/dev/null 2>&1; then
   hwclock -w >> "$LOG_FILE" 2>&1 || true
 fi
 mkdir -p "$APP_DIR/logs" 2>/dev/null || true
-cd "$APP_DIR" && "$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$LOG_FILE" 2>&1 &
+cd "$APP_DIR" && "$JAVA_BIN" -Duser.timezone=Europe/Kiev -jar "$APP_JAR" </dev/null >> "$LOG_FILE" 2>&1 &
 NEW_PID=$!
 sleep 1
 

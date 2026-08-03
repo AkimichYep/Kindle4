@@ -448,7 +448,7 @@ public class KindleDroneDetectorPro {
             case PAGE_WEATHER:
             case PAGE_MOON:
             case PAGE_SPACE:
-            case PAGE_TEMP:
+                // These pages fetch external data — only regenerate when the cached PNG is stale.
                 java.io.File f = new java.io.File(PAGE_FILES[page]);
                 long ageMs = f.exists() ? System.currentTimeMillis() - f.lastModified() : Long.MAX_VALUE;
                 if (ageMs > INFO_REGEN_MS) {
@@ -457,6 +457,13 @@ public class KindleDroneDetectorPro {
                     logFile("PAGE-CACHED p=" + page + " age=" + (ageMs / 1000) + "s");
                 }
                 showPngOrFallback(PAGE_FILES[page], ctx, display);
+                break;
+
+            case PAGE_TEMP:
+                // Home Temperature reads a local sensor — always regenerate so the display
+                // shows the current reading, not a cached morning value.
+                generateInfoImage(PAGE_TEMP, ctx);
+                showPngOrFallback(PAGE_FILES[PAGE_TEMP], ctx, display);
                 break;
 
             case PAGE_RADAR:
