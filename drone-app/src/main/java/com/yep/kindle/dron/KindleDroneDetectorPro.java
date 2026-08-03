@@ -67,6 +67,8 @@ public class KindleDroneDetectorPro {
     /** How long the radar image stays visible (ms). */
     static final long RADAR_HOLD_MS     = 30_000L;   // 30 s
     static final long MESSAGE_HOLD_MS   = 20_000L;   // 20 s temporary message overlay
+    /** Re-render an info page PNG only if it is older than this (ms). */
+    static final long INFO_REGEN_MS     = 10 * 60_000L; // 10 min
 
     // Display page indices
     static final int PAGE_WEATHER  = 0;
@@ -444,23 +446,17 @@ public class KindleDroneDetectorPro {
                                      boolean firstRun, RadarImageManager radarMgr) {
         switch (page) {
             case PAGE_WEATHER:
-                generateInfoImage(PAGE_WEATHER, ctx);
-                showPngOrFallback(PAGE_FILES[PAGE_WEATHER], ctx, display);
-                break;
-
             case PAGE_MOON:
-                generateInfoImage(PAGE_MOON, ctx);
-                showPngOrFallback(PAGE_FILES[PAGE_MOON], ctx, display);
-                break;
-
             case PAGE_SPACE:
-                generateInfoImage(PAGE_SPACE, ctx);
-                showPngOrFallback(PAGE_FILES[PAGE_SPACE], ctx, display);
-                break;
-
             case PAGE_TEMP:
-                generateInfoImage(PAGE_TEMP, ctx);
-                showPngOrFallback(PAGE_FILES[PAGE_TEMP], ctx, display);
+                java.io.File f = new java.io.File(PAGE_FILES[page]);
+                long ageMs = f.exists() ? System.currentTimeMillis() - f.lastModified() : Long.MAX_VALUE;
+                if (ageMs > INFO_REGEN_MS) {
+                    generateInfoImage(page, ctx);
+                } else {
+                    logFile("PAGE-CACHED p=" + page + " age=" + (ageMs / 1000) + "s");
+                }
+                showPngOrFallback(PAGE_FILES[page], ctx, display);
                 break;
 
             case PAGE_RADAR:
@@ -524,12 +520,7 @@ public class KindleDroneDetectorPro {
         List<AP> radarAps = buildRadarAps(ctx, firstRun);
 
         if (radarAps.isEmpty()) {
-            // Nothing to show — just put up a text placeholder for the hold period
-            display.clearForPageSwitch("radar-empty");
-            KindleUtils.exec("eips", "0", "10", "RADAR: no new MACs");
-            KindleUtils.sleep(RADAR_HOLD_MS);
-            display.clearForPageSwitch("");
-            logFile("RADAR empty");
+            logFile("RADAR empty, skip");
             return;
         }
 

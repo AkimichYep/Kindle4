@@ -67,7 +67,12 @@ install_rc_local() {
   [ "$ROOTFS_WRITABLE" = "1" ] || return 1
   [ -f "$RC_LOCAL" ] || return 1
   grep -q 'drone-button-waitforkey.sh' "$RC_LOCAL" 2>/dev/null && return 0
-  echo "$BOOT_CMD" >> "$RC_LOCAL" 2>/dev/null
+  # Insert before 'exit 0' so the line is not dead code.
+  if grep -q '^exit 0' "$RC_LOCAL" 2>/dev/null; then
+    sed -i "s|^exit 0|$BOOT_CMD\nexit 0|" "$RC_LOCAL" 2>/dev/null
+  else
+    echo "$BOOT_CMD" >> "$RC_LOCAL" 2>/dev/null
+  fi
   chmod +x "$RC_LOCAL" 2>/dev/null
   grep -q 'drone-button-waitforkey.sh' "$RC_LOCAL" 2>/dev/null
 }

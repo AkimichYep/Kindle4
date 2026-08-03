@@ -1,9 +1,10 @@
 #!/bin/sh
 # Wake daemon: keep drone app alive and restart on Kindle wake events.
 
+APP_DIR="${APP_DIR:-/mnt/us/drone-app}"
 START_SCRIPT="${START_SCRIPT:-/mnt/us/drone-start.sh}"
-LOG_FILE="${LOG_FILE:-/mnt/us/drone-wake-daemon.log}"
-DAEMON_LOCK_DIR="${DAEMON_LOCK_DIR:-/mnt/us/drone-wake.lock}"
+LOG_FILE="${LOG_FILE:-$APP_DIR/logs/wake-daemon.log}"
+DAEMON_LOCK_DIR="${DAEMON_LOCK_DIR:-/tmp/drone-wake.lock}"
 DAEMON_LOCK_PID_FILE="$DAEMON_LOCK_DIR/pid"
 TZ_FILE="${TZ_FILE:-/var/local/system/tz}"
 DEFAULT_TZ="${DEFAULT_TZ:-EET-2EEST,M3.5.0/3,M10.5.0/4}"
@@ -55,10 +56,17 @@ cleanup() {
 acquire_lock || exit 0
 trap cleanup INT TERM HUP
 
+open_ports() {
+  iptables -C INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null || \
+    iptables -I INPUT -p tcp --dport 8080 -j ACCEPT 2>/dev/null || true
+}
+
 echo "$(date): daemon started pid=$$" >> "$LOG_FILE"
+open_ports
 "$START_SCRIPT"
 
 while true; do
+  open_ports
   if command -v lipc-wait-event >/dev/null 2>&1; then
     if lipc-wait-event -m com.lab126.powerd -s outOfScreenSaver >/dev/null 2>&1; then
       echo "$(date): outOfScreenSaver -> ensure app running" >> "$LOG_FILE"

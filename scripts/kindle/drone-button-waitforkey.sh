@@ -23,10 +23,11 @@ PREV_ALT_CODE="${PREV_ALT_CODE:-}"
 # RIGHT_NEXT_CODE / PREV_CODE, without touching the dispatch logic below.
 EXTRA_NEXT_CODES="${EXTRA_NEXT_CODES:-}"
 EXTRA_PREV_CODES="${EXTRA_PREV_CODES:-}"
-APP_JAR="${APP_JAR:-/mnt/us/drone-app-1.0.0-SNAPSHOT.jar}"
+APP_DIR="${APP_DIR:-/mnt/us/drone-app}"
+APP_JAR="${APP_JAR:-$APP_DIR/drone-app-2.0.0-SNAPSHOT.jar}"
 JAVA_BIN="${JAVA_BIN:-/mnt/us/java/jre/bin/java}"
-APP_LOG="${APP_LOG:-/mnt/us/drone-app.log}"
-LISTENER_LOG="${LISTENER_LOG:-/mnt/us/drone-button-waitforkey.log}"
+APP_LOG="${APP_LOG:-$APP_DIR/logs/app.log}"
+LISTENER_LOG="${LISTENER_LOG:-$APP_DIR/logs/drone-button-waitforkey.log}"
 IPTABLES_BIN="${IPTABLES_BIN:-/usr/sbin/iptables}"
 IPTABLES_SAVE_BIN="${IPTABLES_SAVE_BIN:-/usr/sbin/iptables-save}"
 LISTENER_PORT="${LISTENER_PORT:-5555}"
@@ -78,28 +79,34 @@ ensure_firewall_rule() {
 
   if "$IPTABLES_SAVE_BIN" 2>/dev/null | grep -q -- "-A INPUT -i wlan0 -p tcp -m tcp --dport $LISTENER_PORT -j ACCEPT"; then
     log "firewall rule already present for tcp/$LISTENER_PORT"
-    return 0
-  fi
-
-  if "$IPTABLES_BIN" -I INPUT 1 -i wlan0 -p tcp -m tcp --dport "$LISTENER_PORT" -j ACCEPT; then
+  elif "$IPTABLES_BIN" -I INPUT 1 -i wlan0 -p tcp -m tcp --dport "$LISTENER_PORT" -j ACCEPT; then
     log "firewall rule added for tcp/$LISTENER_PORT"
   else
     log "failed to add firewall rule for tcp/$LISTENER_PORT"
+  fi
+
+  if "$IPTABLES_SAVE_BIN" 2>/dev/null | grep -q -- "--dport 8080"; then
+    log "firewall rule already present for tcp/8080"
+  elif "$IPTABLES_BIN" -I INPUT 1 -p tcp --dport 8080 -j ACCEPT; then
+    log "firewall rule added for tcp/8080"
+  else
+    log "failed to add firewall rule for tcp/8080"
   fi
 }
 
 start_app() {
   ensure_firewall_rule
 
-  if pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
+  if pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
     log "start ignored (already running)"
     return 0
   fi
 
-  "$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$APP_LOG" 2>&1 &
+  mkdir -p "$APP_DIR/logs" 2>/dev/null || true
+  cd "$APP_DIR" && "$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$APP_LOG" 2>&1 &
   sleep 1
 
-  if pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
+  if pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
     log "app started"
   else
     log "app failed to start"
@@ -107,7 +114,7 @@ start_app() {
 }
 
 stop_app() {
-  PIDS="$(pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar')"
+  PIDS="$(pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar')"
   if [ -z "$PIDS" ]; then
     log "stop ignored (not running)"
     return 0
@@ -118,7 +125,7 @@ stop_app() {
   done
   sleep 1
 
-  if pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
+  if pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
     log "app still running after SIGTERM"
   else
     log "app stopped"
@@ -131,7 +138,7 @@ trigger_refresh_and_next_page() {
 
   ensure_firewall_rule
 
-  if ! pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
+  if ! pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then
     start_app
   fi
 

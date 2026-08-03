@@ -1,11 +1,12 @@
 #!/bin/sh
 # Start Kindle drone app once (idempotent).
 
-APP_JAR="${APP_JAR:-/mnt/us/drone-app-1.0.0-SNAPSHOT.jar}"
+APP_DIR="${APP_DIR:-/mnt/us/drone-app}"
+APP_JAR="${APP_JAR:-$APP_DIR/drone-app-2.0.0-SNAPSHOT.jar}"
 JAVA_BIN="${JAVA_BIN:-/mnt/us/java/jre/bin/java}"
-LOG_FILE="${LOG_FILE:-/mnt/us/drone-app.log}"
-APP_PID_FILE="${APP_PID_FILE:-/mnt/us/drone-app.pid}"
-LOCK_DIR="${LOCK_DIR:-/mnt/us/drone-app.lock}"
+LOG_FILE="${LOG_FILE:-$APP_DIR/logs/app.log}"
+APP_PID_FILE="${APP_PID_FILE:-$APP_DIR/drone-app.pid}"
+LOCK_DIR="${LOCK_DIR:-/tmp/drone-app.lock}"
 LOCK_PID_FILE="$LOCK_DIR/pid"
 TZ_FILE="${TZ_FILE:-/var/local/system/tz}"
 ETC_TZ_FILE="${ETC_TZ_FILE:-/etc/TZ}"
@@ -51,7 +52,7 @@ if is_alive "$APP_PID"; then
 fi
 
 # Recovery path: find running JVM if PID file is stale/missing.
-APP_PID="$(pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar' | head -n 1)"
+APP_PID="$(pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar' | head -n 1)"
 if is_alive "$APP_PID"; then
   echo "$APP_PID" > "$APP_PID_FILE"
   exit 0
@@ -80,7 +81,8 @@ rdate -s time.nist.gov >> "$LOG_FILE" 2>&1 || true
 if command -v hwclock >/dev/null 2>&1; then
   hwclock -w >> "$LOG_FILE" 2>&1 || true
 fi
-"$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$LOG_FILE" 2>&1 &
+mkdir -p "$APP_DIR/logs" 2>/dev/null || true
+cd "$APP_DIR" && "$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$LOG_FILE" 2>&1 &
 NEW_PID=$!
 sleep 1
 

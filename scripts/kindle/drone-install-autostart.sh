@@ -32,7 +32,7 @@ configure_timezone() {
 install_rc_local() {
   [ -f "$RC_LOCAL" ] || return 1
   grep -q 'drone-wake-daemon.sh' "$RC_LOCAL" 2>/dev/null && return 0
-  echo "$DAEMON_SCRIPT </dev/null >> /mnt/us/drone-wake-daemon.log 2>&1 &" >> "$RC_LOCAL"
+  echo "$DAEMON_SCRIPT </dev/null >> /mnt/us/drone-app/logs/wake-daemon.log 2>&1 &" >> "$RC_LOCAL"
   chmod +x "$RC_LOCAL"
   return 0
 }
@@ -42,7 +42,7 @@ install_initd() {
 #!/bin/sh
 case "$1" in
   start)
-    /mnt/us/drone-wake-daemon.sh </dev/null >> /mnt/us/drone-wake-daemon.log 2>&1 &
+    /mnt/us/drone-wake-daemon.sh </dev/null >> /mnt/us/drone-app/logs/wake-daemon.log 2>&1 &
     ;;
   stop)
     for p in $(pgrep -f '/mnt/us/drone-wake-daemon.sh'); do kill "$p" 2>/dev/null; done

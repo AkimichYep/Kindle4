@@ -1,11 +1,12 @@
 #!/bin/sh
 # Simple control helper for Kindle drone daemon/app.
 
+APP_DIR="${APP_DIR:-/mnt/us/drone-app}"
 DAEMON_SCRIPT="${DAEMON_SCRIPT:-/mnt/us/drone-wake-daemon.sh}"
-DAEMON_LOG="${DAEMON_LOG:-/mnt/us/drone-wake-daemon.log}"
-APP_LOG="${APP_LOG:-/mnt/us/drone-app.log}"
-DAEMON_LOCK_PID_FILE="${DAEMON_LOCK_PID_FILE:-/mnt/us/drone-wake.lock/pid}"
-APP_PID_FILE="${APP_PID_FILE:-/mnt/us/drone-app.pid}"
+DAEMON_LOG="${DAEMON_LOG:-$APP_DIR/logs/wake-daemon.log}"
+APP_LOG="${APP_LOG:-$APP_DIR/logs/app.log}"
+DAEMON_LOCK_PID_FILE="${DAEMON_LOCK_PID_FILE:-/tmp/drone-wake.lock/pid}"
+APP_PID_FILE="${APP_PID_FILE:-$APP_DIR/drone-app.pid}"
 
 is_alive() {
   [ -n "$1" ] && kill -0 "$1" 2>/dev/null
@@ -37,7 +38,7 @@ stop() {
   fi
 
   # Fallback in case PID file is stale.
-  for p in $(pgrep -f 'drone-app-1.0.0-SNAPSHOT.jar'); do
+  for p in $(pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar'); do
     kill "$p" 2>/dev/null
   done
 
@@ -49,7 +50,7 @@ status() {
   echo "--- daemon ---"
   pgrep -fl '/mnt/us/drone-wake-daemon.sh' 2>/dev/null || echo "not running"
   echo "--- app ---"
-  pgrep -fl 'drone-app-1.0.0-SNAPSHOT.jar' 2>/dev/null || echo "not running"
+  pgrep -fl 'drone-app-2.0.0-SNAPSHOT.jar' 2>/dev/null || echo "not running"
 }
 
 logs() {
