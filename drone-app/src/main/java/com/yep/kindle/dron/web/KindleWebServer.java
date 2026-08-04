@@ -56,10 +56,10 @@ public class KindleWebServer {
         s.createContext("/api/img/",             new WebHandlers.ImageServeHandler(deviceState));
         s.createContext("/api/config",           new WebHandlers.ConfigHandler(deviceState));
         s.createContext("/api/weather-refresh",  new WebHandlers.WeatherRefreshHandler(deviceState));
-        s.createContext("/api/hometemp-refresh",     new WebHandlers.KindleViewHandler(deviceState, "hometemp.png",    "/mnt/us/drone-app/img/hometemp.png",    KindleHomeTemp::generateAndSave));
-        s.createContext("/api/moon-refresh",          new WebHandlers.KindleViewHandler(deviceState, "moon.png",         "/mnt/us/drone-app/img/moon.png",         KindleMoonCalendarNoKey::generateAndSave));
-        s.createContext("/api/spaceweather-refresh",  new WebHandlers.KindleViewHandler(deviceState, "spaceweather.png", "/mnt/us/drone-app/img/spaceweather.png", KindleSpaceWeatherNoKey::generateAndSave));
-        s.createContext("/api/radar-refresh",         new WebHandlers.KindleViewHandler(deviceState, "radar.png",        RadarRenderer.IMAGE_FILE,                 imgPath -> {}));
+        s.createContext("/api/hometemp-refresh",     new WebHandlers.KindleViewHandler(deviceState, "hometemp.png",    "/mnt/us/drone-app/img/hometemp.png",    KindleHomeTemp::generateAndSave,          "hometemp"));
+        s.createContext("/api/moon-refresh",          new WebHandlers.KindleViewHandler(deviceState, "moon.png",         "/mnt/us/drone-app/img/moon.png",         KindleMoonCalendarNoKey::generateAndSave, "moon"));
+        s.createContext("/api/spaceweather-refresh",  new WebHandlers.KindleViewHandler(deviceState, "spaceweather.png", "/mnt/us/drone-app/img/spaceweather.png", KindleSpaceWeatherNoKey::generateAndSave, "space"));
+        s.createContext("/api/radar-refresh",         new WebHandlers.KindleViewHandler(deviceState, "radar.png",        RadarRenderer.IMAGE_FILE,                 imgPath -> {},                            "radar"));
         s.createContext("/api/logs",             new WebHandlers.LogsApiHandler());
         s.createContext("/api/logs/list",        new WebHandlers.LogsListHandler());
         s.createContext("/api/logs/view",        new WebHandlers.LogsViewHandler());

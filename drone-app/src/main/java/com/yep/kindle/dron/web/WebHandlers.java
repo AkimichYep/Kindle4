@@ -153,12 +153,14 @@ final class WebHandlers {
         private final String         filename;
         private final String         fallbackPath;
         private final ImageGenerator generator;
+        private final String         pageName;
 
-        KindleViewHandler(DeviceState ds, String filename, String fallbackPath, ImageGenerator gen) {
+        KindleViewHandler(DeviceState ds, String filename, String fallbackPath, ImageGenerator gen, String pageName) {
             this.deviceState  = ds;
             this.filename     = filename;
             this.fallbackPath = fallbackPath;
             this.generator    = gen;
+            this.pageName     = pageName;
         }
 
         public void handle(HttpExchange ex) throws IOException {
@@ -172,6 +174,7 @@ final class WebHandlers {
                 KindleUtils.exec("eips", "-c");
                 KindleUtils.sleep(200);
                 KindleUtils.exec("eips", "-g", imgPath);
+                deviceState.setCurrentPage(pageName);
                 HttpUtils.send(ex, 200, "application/json",
                     String.format("{\"ok\":true,\"imageUrl\":\"/api/img/%s\"}", filename));
             } catch (Exception e) {
@@ -348,6 +351,7 @@ final class WebHandlers {
                 KindleUtils.exec("eips", "-c");
                 KindleUtils.sleep(200);
                 KindleUtils.exec("eips", "-g", imgPath);
+                deviceState.setCurrentPage("weather");
                 HttpUtils.send(ex, 200, "application/json",
                     String.format("{\"ok\":true,\"city\":\"%s\",\"imageUrl\":\"/api/img/weather.png\"}",
                         HttpUtils.escapeJson(city)));

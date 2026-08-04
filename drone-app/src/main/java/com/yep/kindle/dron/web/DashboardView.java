@@ -202,14 +202,8 @@ final class DashboardView {
             "    })" +
             "    .catch(function(){});" +
             "}" +
-            "var PAGE_ORDER=['weather','moon','space','hometemp','weather'];" + // radar skips back to weather
-            "function nextPageName(cur){" +
-            "  var i=PAGE_ORDER.indexOf(cur);" +
-            "  return i>=0?PAGE_ORDER[(i+1)%PAGE_ORDER.length]:PAGE_ORDER[0];" +
-            "}" +
             "function update(d){" +
             "  var b=d.battery;" +
-            "  if(d.currentPage){document.getElementById('nextBtn').textContent='Next → '+nextPageName(d.currentPage);}" +
             "  document.getElementById('bpct').textContent=b>=0?b+'%':'--';" +
             "  var f=document.getElementById('bfill');" +
             "  f.style.width=(b>=0?b:0)+'%';" +
@@ -289,7 +283,7 @@ final class DashboardView {
             "  toast(waitMsg,'ok');" +
             "  fetch(endpoint,{method:'POST'})" +
             "    .then(function(r){if(!r.ok)return r.json().then(function(d){throw new Error(d.error||('HTTP '+r.status));});return r.json();})" +
-            "    .then(function(d){btn.disabled=false;showPreview(d.imageUrl,label);toast(label+' updated on Kindle!','ok');})" +
+            "    .then(function(d){btn.disabled=false;showPreview(d.imageUrl,label);toast(label+' updated on Kindle!','ok');loadStatus();})" +
             "    .catch(function(e){btn.disabled=false;toast(e.message||'Connection error','err');});" +
             "}" +
             "function fetchWeather(){" +
