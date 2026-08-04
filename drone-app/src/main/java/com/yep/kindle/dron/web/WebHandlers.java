@@ -135,6 +135,44 @@ final class WebHandlers {
         }
     }
 
+    interface ImageGenerator {
+        void generate(String outputPath) throws Exception;
+    }
+
+    static final class KindleViewHandler implements HttpHandler {
+        private final DeviceState    deviceState;
+        private final String         filename;
+        private final String         fallbackPath;
+        private final ImageGenerator generator;
+
+        KindleViewHandler(DeviceState ds, String filename, String fallbackPath, ImageGenerator gen) {
+            this.deviceState  = ds;
+            this.filename     = filename;
+            this.fallbackPath = fallbackPath;
+            this.generator    = gen;
+        }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            AppDataManager dm = deviceState.getDataManager();
+            String imgPath = dm != null
+                ? new File(dm.getImgDir(), filename).getAbsolutePath()
+                : fallbackPath;
+            try {
+                generator.generate(imgPath);
+                KindleUtils.exec("eips", "-c");
+                KindleUtils.sleep(200);
+                KindleUtils.exec("eips", "-g", imgPath);
+                HttpUtils.send(ex, 200, "application/json",
+                    String.format("{\"ok\":true,\"imageUrl\":\"/api/img/%s\"}", filename));
+            } catch (Exception e) {
+                HttpUtils.send(ex, 500, "application/json",
+                    String.format("{\"ok\":false,\"error\":\"%s\"}",
+                        HttpUtils.escapeJson(e.getMessage() != null ? e.getMessage() : "unknown")));
+            }
+        }
+    }
+
     static final class WeatherRefreshHandler implements HttpHandler {
         private final DeviceState deviceState;
         WeatherRefreshHandler(DeviceState deviceState) { this.deviceState = deviceState; }

@@ -144,10 +144,6 @@ public class KindleHomeTemp {
     }
 
     static void saveCsv() {
-        // Prune old entries before writing
-        LocalDate cutoff = LocalDate.now(ZoneId.systemDefault()).minusDays(HISTORY_DAYS + 5);
-        dayData.entrySet().removeIf(e -> e.getKey().isBefore(cutoff));
-
         File tmp = new File(CSV_PATH + ".tmp");
         try (PrintWriter pw = new PrintWriter(new BufferedWriter(new FileWriter(tmp)))) {
             pw.println("# date,min,max,sum,count");

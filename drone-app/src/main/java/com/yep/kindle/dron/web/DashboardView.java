@@ -50,11 +50,12 @@ final class DashboardView {
             ".btn-refresh{background:#1e293b;color:#94a3b8;border:1px solid #334155}" +
             ".btn-refresh:active{background:#0f172a}" +
             ".divider{border:none;border-top:1px solid #1e293b;margin:14px 0}" +
-            // Weather row: button on left, image preview on right
-            ".wx-row{display:flex;gap:10px;align-items:flex-start;margin-bottom:12px}" +
-            ".wx-btn-col{flex:1;position:relative}" +
-            ".wx-img-col{flex:0 0 auto;width:110px;display:none}" +
-            ".wx-img-col img{width:110px;height:147px;object-fit:cover;border-radius:8px;border:1px solid #334155;display:block;cursor:pointer}" +
+            ".panel-wrap{display:flex;gap:12px;align-items:flex-start}" +
+            ".btn-col{flex:1;display:flex;flex-direction:column;gap:10px}" +
+            ".preview-col{flex:0 0 120px;display:none}" +
+            ".preview-col img{width:120px;height:160px;object-fit:cover;border-radius:8px;border:1px solid #334155;display:block;cursor:pointer}" +
+            ".preview-label{font-size:10px;text-transform:uppercase;color:#64748b;margin-top:4px;text-align:center;letter-spacing:.5px}" +
+            ".wx-btn-col{position:relative}" +
             // Tooltip anchored to button column
             ".wx-tip{visibility:hidden;opacity:0;background:#1e293b;color:#94a3b8;border:1px solid #334155;" +
                 "padding:10px 12px;border-radius:8px;position:absolute;z-index:10;top:100%;left:0;right:0;" +
@@ -62,7 +63,15 @@ final class DashboardView {
             ".wx-btn-col:hover .wx-tip{visibility:visible;opacity:1}" +
             ".btn-wx{background:#0e7490;color:#ecfeff;width:100%;text-align:center}" +
             ".btn-wx:hover{background:#0891b2}" +
-            ".btn-wx:disabled{background:#1e293b;color:#4b5563;cursor:default}" +
+            ".btn-ht{background:#7c3aed;color:#ede9fe;width:100%;text-align:center}" +
+            ".btn-ht:hover{background:#6d28d9}" +
+            ".btn-moon{background:#1e3a8a;color:#bfdbfe;width:100%;text-align:center}" +
+            ".btn-moon:hover{background:#1e40af}" +
+            ".btn-sw{background:#7f1d1d;color:#fecaca;width:100%;text-align:center}" +
+            ".btn-sw:hover{background:#991b1b}" +
+            ".btn-radar{background:#166534;color:#bbf7d0;width:100%;text-align:center}" +
+            ".btn-radar:hover{background:#15803d}" +
+            ".btn-wx:disabled,.btn-ht:disabled,.btn-moon:disabled,.btn-sw:disabled,.btn-radar:disabled{background:#1e293b;color:#4b5563;cursor:default}" +
             ".toast{text-align:center;padding:8px 12px;border-radius:8px;font-size:12px;margin-top:4px;display:none}" +
             ".toast.ok{background:#064e3b;color:#6ee7b7;display:block}" +
             ".toast.err{background:#450a0a;color:#fca5a5;display:block}" +
@@ -111,8 +120,8 @@ final class DashboardView {
             "<button class='btn btn-send' onclick='saveCity()'>Save</button>" +
             "</div>" +
 
-            // Weather button (left) + thumbnail preview (right)
-            "<div class='wx-row'>" +
+            "<div class='panel-wrap'>" +
+            "<div class='btn-col'>" +
             "<div class='wx-btn-col'>" +
             "<div class='wx-tip'>" +
             "Weather data: open-meteo.com (no API key)\n" +
@@ -122,8 +131,47 @@ final class DashboardView {
             "</div>" +
             "<button class='btn btn-wx' id='wxBtn' onclick='fetchWeather()'>Weather in <span id='wxCity'>…</span></button>" +
             "</div>" +
-            "<div class='wx-img-col' id='wxImgCol'>" +
-            "<img id='wxImgEl' src='' alt='Weather preview' onclick='openFullImg()'/>" +
+            "<div class='wx-btn-col'>" +
+            "<div class='wx-tip'>" +
+            "Sensor: /sys/bus/i2c/devices/1-0048/papyrus_temperature\n" +
+            "History: all-time daily aggregates (min/max/avg)\n" +
+            "CSV: /mnt/us/drone-app/data/hometemp.csv\n" +
+            "Image: /mnt/us/drone-app/img/hometemp.png\n" +
+            "Shown on Kindle via eips command" +
+            "</div>" +
+            "<button class='btn btn-ht' id='htBtn' onclick='fetchHomeTemp()'>Home Temp</button>" +
+            "</div>" +
+            "<div class='wx-btn-col'>" +
+            "<div class='wx-tip'>" +
+            "Moon phase calculated from lunar cycle\n" +
+            "28-day calendar with phase icons\n" +
+            "Image: /mnt/us/drone-app/img/moon.png\n" +
+            "Shown on Kindle via eips command" +
+            "</div>" +
+            "<button class='btn btn-moon' id='moonBtn' onclick='fetchMoon()'>Moon Calendar</button>" +
+            "</div>" +
+            "<div class='wx-btn-col'>" +
+            "<div class='wx-tip'>" +
+            "Space weather from NOAA SWPC\n" +
+            "Solar wind, Kp index, X-ray flux\n" +
+            "Image: /mnt/us/drone-app/img/spaceweather.png\n" +
+            "Shown on Kindle via eips command" +
+            "</div>" +
+            "<button class='btn btn-sw' id='swBtn' onclick='fetchSpaceWeather()'>Space Weather</button>" +
+            "</div>" +
+            "<div class='wx-btn-col'>" +
+            "<div class='wx-tip'>" +
+            "Current WiFi radar frame (live detection)\n" +
+            "Radar PNG updated by the drone detector loop\n" +
+            "Image: /mnt/us/drone-app/img/radar.png\n" +
+            "Shown on Kindle via eips command" +
+            "</div>" +
+            "<button class='btn btn-radar' id='radarBtn' onclick='fetchRadar()'>Radar</button>" +
+            "</div>" +
+            "</div>" +
+            "<div class='preview-col' id='previewCol'>" +
+            "<img id='previewImg' src='' alt='Preview' onclick='openFullPreview()'/>" +
+            "<div class='preview-label' id='previewLabel'></div>" +
             "</div>" +
             "</div>" +
 
@@ -216,34 +264,34 @@ final class DashboardView {
             "    })" +
             "    .catch(function(e){inp.classList.add('err');toast(e.message||'Error','err');});" +
             "}" +
+            "function showPreview(url,label){" +
+            "  var img=document.getElementById('previewImg');" +
+            "  img.src=url+'?t='+new Date().getTime();" +
+            "  document.getElementById('previewLabel').textContent=label;" +
+            "  document.getElementById('previewCol').style.display='block';" +
+            "}" +
+            "function openFullPreview(){" +
+            "  var src=document.getElementById('previewImg').src;" +
+            "  if(src)window.open(src,'_blank');" +
+            "}" +
+            "function fetchView(btnId,endpoint,waitMsg,label){" +
+            "  var btn=document.getElementById(btnId);btn.disabled=true;" +
+            "  toast(waitMsg,'ok');" +
+            "  fetch(endpoint,{method:'POST'})" +
+            "    .then(function(r){if(!r.ok)return r.json().then(function(d){throw new Error(d.error||('HTTP '+r.status));});return r.json();})" +
+            "    .then(function(d){btn.disabled=false;showPreview(d.imageUrl,label);toast(label+' updated on Kindle!','ok');})" +
+            "    .catch(function(e){btn.disabled=false;toast(e.message||'Connection error','err');});" +
+            "}" +
             "function fetchWeather(){" +
             "  var city=document.getElementById('cityIn').value.trim().split(/[,;]/)[0].trim();" +
             "  var err=validateCityInput(city);" +
             "  if(err){document.getElementById('cityIn').classList.add('err');toast(err,'err');return;}" +
-            "  var btn=document.getElementById('wxBtn');" +
-            "  btn.disabled=true;" +
-            "  toast('Fetching weather…','ok');" +
-            "  fetch('/api/weather-refresh',{method:'POST'})" +
-            "    .then(function(r){" +
-            "      if(!r.ok)return r.json().then(function(d){throw new Error(d.error||('HTTP '+r.status));});" +
-            "      return r.json();" +
-            "    })" +
-            "    .then(function(d){" +
-            "      btn.disabled=false;" +
-            "      var img=document.getElementById('wxImgEl');" +
-            "      img.src=d.imageUrl+'?t='+new Date().getTime();" +
-            "      document.getElementById('wxImgCol').style.display='block';" +
-            "      toast('Weather updated on Kindle!','ok');" +
-            "    })" +
-            "    .catch(function(e){" +
-            "      btn.disabled=false;" +
-            "      toast(e.message||'Connection error','err');" +
-            "    });" +
+            "  fetchView('wxBtn','/api/weather-refresh','Fetching weather…','Weather');" +
             "}" +
-            "function openFullImg(){" +
-            "  var src=document.getElementById('wxImgEl').src;" +
-            "  if(src)window.open(src,'_blank');" +
-            "}" +
+            "function fetchHomeTemp(){fetchView('htBtn','/api/hometemp-refresh','Reading temperature…','Home Temp');}" +
+            "function fetchMoon(){fetchView('moonBtn','/api/moon-refresh','Generating moon calendar…','Moon Calendar');}" +
+            "function fetchSpaceWeather(){fetchView('swBtn','/api/spaceweather-refresh','Fetching space weather…','Space Weather');}" +
+            "function fetchRadar(){fetchView('radarBtn','/api/radar-refresh','Loading radar…','Radar');}" +
             "function toast(msg,cls){" +
             "  var el=document.getElementById('toast');" +
             "  el.textContent=msg;el.className='toast '+cls;" +

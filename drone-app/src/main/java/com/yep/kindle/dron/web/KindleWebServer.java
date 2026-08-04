@@ -1,6 +1,10 @@
 package com.yep.kindle.dron.web;
 
 import com.sun.net.httpserver.HttpServer;
+import com.yep.kindle.dron.KindleHomeTemp;
+import com.yep.kindle.dron.KindleMoonCalendarNoKey;
+import com.yep.kindle.dron.KindleSpaceWeatherNoKey;
+import com.yep.kindle.dron.display.RadarRenderer;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
@@ -19,7 +23,11 @@ import java.util.concurrent.Executors;
  *   GET  /api/img/<name>     — serve image from img/ folder
  *   GET  /api/config         — JSON: current city config
  *   POST /api/config         — save city (plain text body)
- *   POST /api/weather-refresh — geocode city, generate weather PNG, show on Kindle
+ *   POST /api/weather-refresh  — geocode city, generate weather PNG, show on Kindle
+ *   POST /api/hometemp-refresh    — read PMIC sensor, update history CSV, show hometemp PNG on Kindle
+ *   POST /api/moon-refresh        — generate moon calendar PNG, show on Kindle
+ *   POST /api/spaceweather-refresh — fetch NOAA space weather, show PNG on Kindle
+ *   POST /api/radar-refresh       — re-display current radar.png on Kindle
  *   GET  /health             — "ok"
  */
 public class KindleWebServer {
@@ -44,6 +52,10 @@ public class KindleWebServer {
         s.createContext("/api/img/",             new WebHandlers.ImageServeHandler(deviceState));
         s.createContext("/api/config",           new WebHandlers.ConfigHandler(deviceState));
         s.createContext("/api/weather-refresh",  new WebHandlers.WeatherRefreshHandler(deviceState));
+        s.createContext("/api/hometemp-refresh",     new WebHandlers.KindleViewHandler(deviceState, "hometemp.png",    "/mnt/us/drone-app/img/hometemp.png",    KindleHomeTemp::generateAndSave));
+        s.createContext("/api/moon-refresh",          new WebHandlers.KindleViewHandler(deviceState, "moon.png",         "/mnt/us/drone-app/img/moon.png",         KindleMoonCalendarNoKey::generateAndSave));
+        s.createContext("/api/spaceweather-refresh",  new WebHandlers.KindleViewHandler(deviceState, "spaceweather.png", "/mnt/us/drone-app/img/spaceweather.png", KindleSpaceWeatherNoKey::generateAndSave));
+        s.createContext("/api/radar-refresh",         new WebHandlers.KindleViewHandler(deviceState, "radar.png",        RadarRenderer.IMAGE_FILE,                 imgPath -> {}));
         s.createContext("/health",               new WebHandlers.HealthHandler());
         s.setExecutor(Executors.newFixedThreadPool(2));
         s.start();
