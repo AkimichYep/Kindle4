@@ -58,12 +58,12 @@ public final class ScreenBuilder {
             sc[row++] = pad("  Error: " + errMsg);
             sc[row++] = pad("");
         } else {
-            String icon = weatherIcon(nz(wx.description));
-            String city = nz(wx.city);
+            String icon = weatherIcon(KindleFormatUtils.nz(wx.description));
+            String city = KindleFormatUtils.nz(wx.city);
             if (city.length() > 14) city = city.substring(0, 14);
-            String country = nz(wx.country);
+            String country = KindleFormatUtils.nz(wx.country);
             if (country.length() > 10) country = country.substring(0, 10);
-            String desc = nz(wx.description);
+            String desc = KindleFormatUtils.nz(wx.description);
             if (desc.length() > 18) desc = desc.substring(0, 18);
 
             // Location line with icon
@@ -76,8 +76,8 @@ public final class ScreenBuilder {
             int temp = 0;
             int feels = 0;
             try {
-                temp = Integer.parseInt(nz(wx.temp).replaceAll("[^-0-9]", ""));
-                feels = Integer.parseInt(nz(wx.feelsLike).replaceAll("[^-0-9]", ""));
+                temp = Integer.parseInt(KindleFormatUtils.nz(wx.temp).replaceAll("[^-0-9]", ""));
+                feels = Integer.parseInt(KindleFormatUtils.nz(wx.feelsLike).replaceAll("[^-0-9]", ""));
             } catch (Exception ignored) {}
 
             // Temperature line
@@ -88,13 +88,13 @@ public final class ScreenBuilder {
             sc[row++] = pad(tempLine);
 
             // Humidity and Pressure
-            String humidity = nz(wx.humidity);
-            String pressure = nz(wx.pressure);
+            String humidity = KindleFormatUtils.nz(wx.humidity);
+            String pressure = KindleFormatUtils.nz(wx.pressure);
             sc[row++] = pad(String.format("  Humidity: %3s%%  |  Press: %4s hPa", humidity, pressure));
 
             // Wind information
-            String windDir = nz(wx.windDir);
-            String windSpeed = nz(wx.windSpeed);
+            String windDir = KindleFormatUtils.nz(wx.windDir);
+            String windSpeed = KindleFormatUtils.nz(wx.windSpeed);
             String windLine;
             if (windSpeed.equals("0") || windSpeed.equals("--")) {
                 windLine = "  Wind: Calm";
@@ -253,11 +253,6 @@ public final class ScreenBuilder {
     public static String shortText(String s, int max) {
         if (s == null || s.isEmpty()) return "--";
         return s.length() > max ? s.substring(0, max) : s;
-    }
-
-    /** Return s or "--" if null/empty. */
-    public static String nz(String s) {
-        return (s == null || s.isEmpty()) ? "--" : s;
     }
 
     /** Format seconds as H:MM:SS. */

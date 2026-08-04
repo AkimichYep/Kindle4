@@ -166,6 +166,7 @@ public class KindleDroneDetectorPro {
         // Ensure folder structure exists before anything writes to it
         dataManager = new AppDataManager(APP_DIR);
         webState.setDataManager(dataManager);
+        webState.loadConfig();
         KindleHomeTemp.setCsvPath(dataManager.getHomeTempCsvFile().getAbsolutePath());
 
         try {

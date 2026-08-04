@@ -1,6 +1,7 @@
 package com.yep.kindle.dron.service;
 
-import java.io.*;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -66,7 +67,7 @@ public final class WifiScanner {
         try {
             p = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "scan"});
             final Process fp = p;
-            Thread errDrain = new Thread(() -> drainStream(fp.getErrorStream()), "err-drain");
+            Thread errDrain = new Thread(() -> KindleUtils.drain(fp.getErrorStream()), "err-drain");
             errDrain.setDaemon(true);
             errDrain.start();
 
@@ -143,7 +144,7 @@ public final class WifiScanner {
         try {
             p = Runtime.getRuntime().exec(new String[]{"wmiconfig", "-i", "wlan0", "--getTargetStats"});
             final Process fp = p;
-            Thread errDrain = new Thread(() -> drainStream(fp.getErrorStream()), "stat-err-drain");
+            Thread errDrain = new Thread(() -> KindleUtils.drain(fp.getErrorStream()), "stat-err-drain");
             errDrain.setDaemon(true);
             errDrain.start();
 
@@ -194,16 +195,4 @@ public final class WifiScanner {
         return WifiUtils.readProcWireless();
     }
 
-    // =========================================================================
-    // Utilities
-    // =========================================================================
-
-    /** Drain an input stream silently (prevents subprocess pipe stalls). */
-    public static void drainStream(InputStream is) {
-        if (is == null) return;
-        try {
-            byte[] buf = new byte[512];
-            while (is.read(buf) != -1) { /* discard */ }
-        } catch (IOException ignored) {}
-    }
 }

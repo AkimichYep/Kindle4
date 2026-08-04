@@ -48,6 +48,7 @@ public class AppDataManager {
     public File getCsvFile()          { return new File(dataDir, "drone_nets.csv"); }
     public File getCsvTempFile()      { return new File(dataDir, "drone_nets.csv.tmp"); }
     public File getHomeTempCsvFile()  { return new File(dataDir, "hometemp.csv"); }
+    public File getConfigFile()       { return new File(configDir, "app.json"); }
 
     // ── Image helpers ─────────────────────────────────────────────────────────
 
@@ -72,10 +73,18 @@ public class AppDataManager {
         File f = new File(dataDir, "device_state.json");
         String json = String.format(
             "{\"message\":\"%s\",\"status\":\"%s\",\"ts\":%d}",
-            escapeJson(state.getLastMessage()),
-            escapeJson(state.getStatusMessage()),
+            HttpUtils.escapeJson(state.getLastMessage()),
+            HttpUtils.escapeJson(state.getStatusMessage()),
             System.currentTimeMillis());
         Files.write(f.toPath(), json.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+    }
+
+    public AppConfig loadConfig() {
+        return AppConfig.load(getConfigFile());
+    }
+
+    public void saveConfig(AppConfig cfg) throws IOException {
+        cfg.save(getConfigFile());
     }
 
     public void writeLog(String message) throws IOException {
@@ -85,11 +94,4 @@ public class AppDataManager {
             StandardOpenOption.CREATE, StandardOpenOption.APPEND);
     }
 
-    // ── Utilities ─────────────────────────────────────────────────────────────
-
-    private static String escapeJson(String s) {
-        if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r");
-    }
 }

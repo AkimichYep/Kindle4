@@ -1,7 +1,7 @@
 package com.yep.kindle.dron.util;
 
 import java.io.BufferedReader;
-import java.io.InputStreamReader;
+import java.io.FileReader;
 
 public class WifiUtils {
 
@@ -11,10 +11,7 @@ public class WifiUtils {
 
     /** Returns [linkQuality, level, noise] from /proc/net/wireless, or null on failure. */
     public static int[] readProcWireless() {
-        try {
-            Process p = Runtime.getRuntime().exec(new String[]{"cat", "/proc/net/wireless"});
-            p.waitFor();
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
+        try (BufferedReader r = new BufferedReader(new FileReader("/proc/net/wireless"))) {
             String line;
             while ((line = r.readLine()) != null) {
                 if (line.trim().startsWith("wlan0")) {
@@ -27,14 +24,12 @@ public class WifiUtils {
                             int noise = Integer.parseInt(parts[4].replace(".", "").trim());
                             if (level > 127) level -= 256;
                             if (noise > 127) noise -= 256;
-                            r.close();
                             return new int[]{link, level, noise};
                         } catch (Exception ignored) {}
                     }
                     break;
                 }
             }
-            r.close();
         } catch (Exception ignored) {}
         return null;
     }

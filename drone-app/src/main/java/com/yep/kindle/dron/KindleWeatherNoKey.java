@@ -39,9 +39,10 @@ import java.util.Locale;
  */
 public class KindleWeatherNoKey {
 
-    // Coordinates for Kharkiv, Ukraine
+    // Default coordinates: Kharkiv, Ukraine
     private static final String LAT = "49.9884";
     private static final String LON = "36.2328";
+    private static final String DEFAULT_CITY_LABEL = "Kharkiv, UA";
 
     private static final DateTimeFormatter API_TIME       = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm");
     private static final DateTimeFormatter API_TIME_LABEL = DateTimeFormatter.ofPattern("HH:mm");
@@ -60,9 +61,23 @@ public class KindleWeatherNoKey {
      * Called by KindleDroneDetectorPro for in-process image generation.
      */
     public static void generateAndSave(String outputPath) throws Exception {
-        String weatherJson = fetchWeatherData();
+        generateAndSave(outputPath, DEFAULT_CITY_LABEL, LAT, LON);
+    }
+
+    /** Geocode city by name, then generate and save the weather image. */
+    public static void generateAndSaveForCity(String outputPath, String cityName) throws Exception {
+        double[] coords = lookupCoords(cityName);
+        String lat = String.valueOf(coords[0]);
+        String lon = String.valueOf(coords[1]);
+        generateAndSave(outputPath, cityName, lat, lon);
+    }
+
+    /** Generate weather image for explicit coordinates and city label. */
+    public static void generateAndSave(String outputPath, String cityLabel, String lat, String lon)
+            throws Exception {
+        String weatherJson = fetchWeatherData(lat, lon);
         WeatherSnapshot snapshot = parseWeatherSnapshot(weatherJson);
-        BufferedImage img = generateEInkImage(snapshot);
+        BufferedImage img = generateEInkImage(snapshot, cityLabel);
         ImageIO.write(img, "png", new File(outputPath));
     }
 
@@ -70,9 +85,9 @@ public class KindleWeatherNoKey {
     // Data fetch
     // -------------------------------------------------------------------------
 
-    private static String fetchWeatherData() throws Exception {
+    private static String fetchWeatherData(String lat, String lon) throws Exception {
         String urlString = "https://api.open-meteo.com/v1/forecast"
-                + "?latitude=" + LAT + "&longitude=" + LON
+                + "?latitude=" + lat + "&longitude=" + lon
                 + "&current=temperature_2m,weather_code,apparent_temperature"
                 +          ",relative_humidity_2m,wind_speed_10m"
                 + "&hourly=temperature_2m,weather_code"
@@ -82,11 +97,42 @@ public class KindleWeatherNoKey {
         return KindleHttpClient.get(urlString, "KindleWeatherNoKey/1.0");
     }
 
+    /**
+     * Geocode a city name to lat/lon using the Open-Meteo geocoding API (no key required).
+     * Falls back to Kharkiv defaults on failure.
+     */
+    private static double[] lookupCoords(String cityName) throws Exception {
+        String encoded = cityName.replace(" ", "%20");
+        String url = "https://geocoding-api.open-meteo.com/v1/search?name="
+                + encoded + "&count=1&language=en&format=json";
+        String json = KindleHttpClient.get(url, "KindleWeatherNoKey/1.0");
+        int resultsIdx = json.indexOf("\"results\"");
+        if (resultsIdx < 0) throw new Exception("City not found: " + cityName);
+        int arrOpen = json.indexOf('[', resultsIdx);
+        if (arrOpen < 0) throw new Exception("City not found: " + cityName);
+        // Find end of the results array to limit the search scope
+        int firstObjOpen = json.indexOf('{', arrOpen);
+        if (firstObjOpen < 0) throw new Exception("City not found: " + cityName);
+        // Extract the first result object using brace depth tracking
+        int depth = 0, objEnd = -1;
+        for (int i = firstObjOpen; i < json.length(); i++) {
+            char c = json.charAt(i);
+            if (c == '{') depth++;
+            else if (c == '}') { depth--; if (depth == 0) { objEnd = i; break; } }
+        }
+        if (objEnd < 0) throw new Exception("City not found: " + cityName);
+        String obj = json.substring(firstObjOpen, objEnd + 1);
+        double lat = KindleJsonParser.getDoubleField(obj, "latitude");
+        double lon = KindleJsonParser.getDoubleField(obj, "longitude");
+        if (lat == 0.0 && lon == 0.0) throw new Exception("No coordinates for: " + cityName);
+        return new double[]{lat, lon};
+    }
+
     // -------------------------------------------------------------------------
     // Image rendering — delegates all chrome to KindleLayoutKit
     // -------------------------------------------------------------------------
 
-    private static BufferedImage generateEInkImage(WeatherSnapshot snapshot) {
+    private static BufferedImage generateEInkImage(WeatherSnapshot snapshot, String cityLabel) {
         BufferedImage image = KindleCanvas.newImage();
         Graphics2D g2d = KindleCanvas.createGraphics(image);
 
@@ -105,7 +151,7 @@ public class KindleWeatherNoKey {
                 iconBase, 80f, headerGlyph,
                 18, 92,                                         // icon position
                 shortCondition(snapshot.currentCode), 34, 112, 56,   // title
-                "Kharkiv, UA", 26, 400, 56);                    // subtitle (city, right area)
+                cityLabel, 26, 400, 56);                        // subtitle (city, right area)
 
         // Date below condition (still in header)
         g2d.setColor(Color.WHITE);

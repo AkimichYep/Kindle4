@@ -2,8 +2,6 @@ package com.yep.kindle.dron.display;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Minimal JSON extraction helpers shared by all Kindle data-parsing classes.
@@ -219,45 +217,57 @@ public final class KindleJsonParser {
 
     /**
      * Extracts a quoted string field value from a flat JSON object string.
-     *
-     * @param jsonObject a single JSON object string
-     * @param fieldName  the field name (without quotes)
-     * @return field value, or empty string if not found
      */
     public static String getStringField(String jsonObject, String fieldName) {
-        Pattern p = Pattern.compile(
-                "\"" + Pattern.quote(fieldName) + "\"\\s*:\\s*\"([^\"]*)\"");
-        Matcher m = p.matcher(jsonObject);
-        return m.find() ? m.group(1) : "";
+        int ki = jsonObject.indexOf("\"" + fieldName + "\"");
+        if (ki < 0) return "";
+        int colon = jsonObject.indexOf(':', ki + fieldName.length() + 2);
+        if (colon < 0) return "";
+        int q1 = jsonObject.indexOf('"', colon + 1);
+        if (q1 < 0) return "";
+        int q2 = jsonObject.indexOf('"', q1 + 1);
+        if (q2 < 0) return "";
+        return jsonObject.substring(q1 + 1, q2);
     }
 
     /**
      * Extracts an integer field value from a flat JSON object string.
-     *
-     * @param jsonObject a single JSON object string
-     * @param fieldName  the field name (without quotes)
-     * @return parsed integer, or 0 if not found
      */
     public static int getIntField(String jsonObject, String fieldName) {
-        Pattern p = Pattern.compile(
-                "\"" + Pattern.quote(fieldName) + "\"\\s*:\\s*(-?\\d+)");
-        Matcher m = p.matcher(jsonObject);
-        return m.find() ? Integer.parseInt(m.group(1)) : 0;
+        int ki = jsonObject.indexOf("\"" + fieldName + "\"");
+        if (ki < 0) return 0;
+        int colon = jsonObject.indexOf(':', ki + fieldName.length() + 2);
+        if (colon < 0) return 0;
+        int vs = colon + 1;
+        while (vs < jsonObject.length() && (jsonObject.charAt(vs) == ' ' || jsonObject.charAt(vs) == '\t')) vs++;
+        int ve = vs;
+        while (ve < jsonObject.length()) {
+            char c = jsonObject.charAt(ve);
+            if (!(Character.isDigit(c) || c == '-')) break;
+            ve++;
+        }
+        try { return Integer.parseInt(jsonObject.substring(vs, ve)); }
+        catch (NumberFormatException e) { return 0; }
     }
 
     /**
      * Extracts a double field value (including scientific notation) from a flat
      * JSON object string.
-     *
-     * @param jsonObject a single JSON object string
-     * @param fieldName  the field name (without quotes)
-     * @return parsed double, or 0.0 if not found
      */
     public static double getDoubleField(String jsonObject, String fieldName) {
-        Pattern p = Pattern.compile(
-                "\"" + Pattern.quote(fieldName)
-                + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)");
-        Matcher m = p.matcher(jsonObject);
-        return m.find() ? Double.parseDouble(m.group(1)) : 0.0;
+        int ki = jsonObject.indexOf("\"" + fieldName + "\"");
+        if (ki < 0) return 0.0;
+        int colon = jsonObject.indexOf(':', ki + fieldName.length() + 2);
+        if (colon < 0) return 0.0;
+        int vs = colon + 1;
+        while (vs < jsonObject.length() && (jsonObject.charAt(vs) == ' ' || jsonObject.charAt(vs) == '\t')) vs++;
+        int ve = vs;
+        while (ve < jsonObject.length()) {
+            char c = jsonObject.charAt(ve);
+            if (!(Character.isDigit(c) || c == '-' || c == '.' || c == 'e' || c == 'E' || c == '+')) break;
+            ve++;
+        }
+        try { return Double.parseDouble(jsonObject.substring(vs, ve)); }
+        catch (NumberFormatException e) { return 0.0; }
     }
 }

@@ -15,6 +15,7 @@ public class DeviceState {
     private volatile long   nextPageAckedSeq = 0;
 
     private AppDataManager dataManager = null;
+    private volatile AppConfig config = new AppConfig();
 
     // ── Messages (trigger overlay on Kindle screen) ───────────────────────────
 
@@ -61,4 +62,14 @@ public class DeviceState {
 
     public AppDataManager getDataManager() { return dataManager; }
     public void setDataManager(AppDataManager manager) { this.dataManager = manager; }
+
+    // ── App config (city etc.) ────────────────────────────────────────────────
+
+    AppConfig getConfig() { return config; }
+    void setConfig(AppConfig cfg) { this.config = cfg; }
+
+    /** Loads config from the data manager's config file; safe to call if manager is null. */
+    public void loadConfig() {
+        if (dataManager != null) config = dataManager.loadConfig();
+    }
 }
