@@ -23,6 +23,7 @@ import com.yep.kindle.dron.service.NetCsvStore;
 import com.yep.kindle.dron.service.WeatherService;
 import com.yep.kindle.dron.service.WifiScanner;
 import com.yep.kindle.dron.tool.KindleTcpListener;
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 import com.yep.kindle.dron.web.AppDataManager;
 import com.yep.kindle.dron.web.DeviceState;
@@ -141,7 +142,7 @@ public class KindleDroneDetectorPro {
 
     public static void main(String[] args) {
         System.setProperty("java.awt.headless", "true");
-        System.out.println("=== KindleDroneDetectorPro v2.5 ===");
+        AppLog.info("=== KindleDroneDetectorPro v2.5 ===");
 
         // ── Shared state ─────────────────────────────────────────────────────
         Map<String, NetRecord> knownNets = new LinkedHashMap<>();
@@ -156,7 +157,7 @@ public class KindleDroneDetectorPro {
         ctx.startTime = System.currentTimeMillis();
 
         DisplayManager    display   = new DisplayManager();
-        RadarImageManager radarMgr  = new RadarImageManager(KindleDroneDetectorPro::logFile);
+        RadarImageManager radarMgr  = new RadarImageManager(AppLog::info);
 
         // ── Web server / shared state ─────────────────────────────────────────
         DeviceState    webState   = new DeviceState();
@@ -173,7 +174,7 @@ public class KindleDroneDetectorPro {
             webServer = new KindleWebServer(webState);
             webServer.start();
         } catch (Exception e) {
-            System.err.println("Web server failed to start: " + e.getMessage());
+            AppLog.err("Web server failed to start: " + e.getMessage());
             webServer = null;
         }
 
@@ -188,19 +189,19 @@ public class KindleDroneDetectorPro {
             saveNetworksCsv(knownNets, dataManagerFinal);
             try { dataManagerFinal.saveDeviceState(webStateFinal); } catch (Exception ignored) { }
             KindleUtils.exec("lipc-set-prop", "com.lab126.powerd", "preventScreenSaver", "0");
-            System.out.println("Shutdown complete.");
+            AppLog.info("Shutdown complete.");
         }));
 
-        openLogFile();
+        AppLog.init(LOG_FILE, LOG_MAX_BYTES);
         int loadedFromCsv = loadNetworksCsv(knownNets, baseline);
         // firstRun = true means no prior CSV → radar will show all APs
         boolean firstRun = (loadedFromCsv < 3);
 
         if (!firstRun) {
             ctx.armed = true;
-            logFile("ARMED CSV:" + loadedFromCsv);
+            AppLog.info("ARMED CSV:" + loadedFromCsv);
         } else {
-            System.out.println("No CSV – learning phase");
+            AppLog.info("No CSV – learning phase");
         }
 
         WifiScanner.initFirmware();
@@ -208,6 +209,20 @@ public class KindleDroneDetectorPro {
         long prevCRC = WifiScanner.readStats(statsResult, true);
         ctx.noiseFloor = statsResult[1];
         ctx.csSnr      = statsResult[2];
+
+
+        KindleWelcomePage.generateAndShow(
+                new java.io.File(dataManager.getImgDir(), "welcome.png").getAbsolutePath());
+        KindleUtils.sleep(20000);
+        try {
+            String weatherPath = new java.io.File(dataManager.getImgDir(), "weather.png").getAbsolutePath();
+            KindleWeatherNoKey.generateAndSaveForCity(weatherPath, webState.getConfigCity());
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(200);
+            KindleUtils.exec("eips", "-g", weatherPath);
+        } catch (Exception e) {
+            AppLog.err("Startup weather: " + e.getMessage());
+        }
 
         ctx.weather = WeatherService.fetchWeather(WEATHER_LOCATION);
         long lastWeatherFetchAt = System.currentTimeMillis();
@@ -218,10 +233,11 @@ public class KindleDroneDetectorPro {
 
         // Generate and show the initial weather page
         generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-        logFile("PAGE->weather");
+        AppLog.info("PAGE->weather");
+        webState.setCurrentPage(PAGE_NAMES[currentPage]);
 
         boolean listenerStarted = KindleTcpListener.startAsync();
-        logFile(listenerStarted ? "TCP listener started on :5555" : "TCP listener already running");
+        AppLog.info(listenerStarted ? "TCP listener started on :5555" : "TCP listener already running");
         long handledTcpSeq = KindleTcpListener.getRefreshAndNextPageSeq();
         long handledWebPageSeq  = 0;
         long lastShownMsgSeq    = 0;
@@ -260,7 +276,7 @@ public class KindleDroneDetectorPro {
                 if (ctx.loop % PROBE_EVERY == 0) {
                     String probe = PROBE_SSIDS[(ctx.loop / PROBE_EVERY) % PROBE_SSIDS.length];
                     WifiScanner.sendProbe(probe);
-                    logFile("PROBE:" + probe);
+                    AppLog.info("PROBE:" + probe);
                 } else {
                     WifiScanner.sendProbe("any");
                 }
@@ -293,7 +309,7 @@ public class KindleDroneDetectorPro {
                     }
                     if (ctx.loop >= BASELINE_LOOPS) {
                         ctx.armed = true;
-                        logFile("ARMED:" + baseline.size() + " MACs");
+                        AppLog.info("ARMED:" + baseline.size() + " MACs");
                         saveNetworksCsv(knownNets);
                         firstRun = false;
                     }
@@ -306,7 +322,7 @@ public class KindleDroneDetectorPro {
                     ctx.statAlertEvents++;
                     if (!emergencyActive) {
                         emergencyActive = true;
-                        logFile("!! DRONE CONFIRMED thr=" + maxThreat);
+                        AppLog.info("!! DRONE CONFIRMED thr=" + maxThreat);
                         emergencyBlink(display);
                         // Redraw current page and reset the hold timer so the 5-min
                         // countdown restarts from now (blink cleared the screen).
@@ -318,7 +334,7 @@ public class KindleDroneDetectorPro {
                 }
                 // Log RF presence separately — informational only
                 if (ctx.externalRF) {
-                    logFile("RF active iCRC=" + ctx.idleCRC);
+                    AppLog.info("RF active iCRC=" + ctx.idleCRC);
                 }
 
                 logLoopToFile(aps, maxThreat, ctx);
@@ -331,7 +347,7 @@ public class KindleDroneDetectorPro {
                 lastWeatherFetchAt = now;
                 WeatherService.WeatherData latest = WeatherService.fetchWeather(WEATHER_LOCATION);
                 ctx.weather = latest;
-                logFile(latest.error == null ? "WX:" + latest.temp + "C" : "WX ERR");
+                AppLog.info(latest.error == null ? "WX:" + latest.temp + "C" : "WX ERR");
             }
 
             // ── Page-advance from physical button (TCP :5555) ─────────────────
@@ -341,6 +357,7 @@ public class KindleDroneDetectorPro {
                 lastWeatherFetchAt = runManualRefresh(ctx, firstRun);
                 currentPage = advancePage(currentPage, ctx, display, firstRun, radarMgr, "BTN");
                 pageShownAt = System.currentTimeMillis();
+                webState.setCurrentPage(PAGE_NAMES[currentPage]);
             }
 
             // ── Page-advance from web UI ───────────────────────────────────────
@@ -351,6 +368,7 @@ public class KindleDroneDetectorPro {
                 lastWeatherFetchAt = runManualRefresh(ctx, firstRun);
                 currentPage = advancePage(currentPage, ctx, display, firstRun, radarMgr, "WEB");
                 pageShownAt = System.currentTimeMillis();
+                webState.setCurrentPage(PAGE_NAMES[currentPage]);
             }
 
             // ── Firmware stats ─────────────────────────────────────────────────
@@ -366,7 +384,7 @@ public class KindleDroneDetectorPro {
                 if (ctx.idleCRC >= IDLE_CRC_THRESHOLD) {
                     ctx.externalRFcount++;
                     if (ctx.externalRFcount >= IDLE_CRC_CONFIRM) ctx.externalRF = true;
-                    logFile("RF iCRC=" + ctx.idleCRC + " cnt=" + ctx.externalRFcount);
+                    AppLog.info("RF iCRC=" + ctx.idleCRC + " cnt=" + ctx.externalRFcount);
                 } else {
                     if (ctx.externalRFcount > 0) ctx.externalRFcount--;
                     if (ctx.externalRFcount == 0) ctx.externalRF = false;
@@ -390,18 +408,18 @@ public class KindleDroneDetectorPro {
                         boolean ok = com.yep.kindle.dron.util.SensorReader
                                 .writeBatterySuspendCurrent(PBANK_LIMIT_MA);
                         pbankThrottleActive = ok;
-                        logFile("PBANK throttle ON batt=" + batt + "% ok=" + ok);
+                        AppLog.info("PBANK throttle ON batt=" + batt + "% ok=" + ok);
                     } else if (pbankThrottleActive && batt < PBANK_RESTORE_BELOW_PCT) {
                         boolean ok = com.yep.kindle.dron.util.SensorReader
                                 .writeBatterySuspendCurrent(0);
                         if (ok) pbankThrottleActive = false;
-                        logFile("PBANK throttle OFF batt=" + batt + "% ok=" + ok);
+                        AppLog.info("PBANK throttle OFF batt=" + batt + "% ok=" + ok);
                     }
                 } else if (isCharging == 0 && pbankThrottleActive) {
                     // USB unplugged — restore so next plug-in starts normal
                     com.yep.kindle.dron.util.SensorReader.writeBatterySuspendCurrent(0);
                     pbankThrottleActive = false;
-                    logFile("PBANK throttle OFF (USB removed)");
+                    AppLog.info("PBANK throttle OFF (USB removed)");
                 }
             }
 
@@ -409,7 +427,7 @@ public class KindleDroneDetectorPro {
             if (saveCounter >= SAVE_EVERY) {
                 saveCounter = 0;
                 saveNetworksCsv(knownNets, dataManager);
-                try { dataManager.saveDeviceState(webState); } catch (Exception e) { logFile("state-save: " + e.getMessage()); }
+                try { dataManager.saveDeviceState(webState); } catch (Exception e) { AppLog.info("state-save: " + e.getMessage()); }
             }
 
             // ── Overlay messages — web UI takes priority over TCP listener ────
@@ -419,7 +437,7 @@ public class KindleDroneDetectorPro {
                 showOverlayMessage(display, webState.getLastMessage());
                 msgShownAt = System.currentTimeMillis();
                 overlayVisible = true;
-                logFile("WEB-MSG seq=" + webMsgSeq);
+                AppLog.info("WEB-MSG seq=" + webMsgSeq);
             } else {
                 KindleTcpListener.OverlaySnapshot overlay = KindleTcpListener.getActiveOverlay();
                 if (overlay != null) {
@@ -428,7 +446,7 @@ public class KindleDroneDetectorPro {
                         shownOverlayId = overlay.id;
                         msgShownAt = System.currentTimeMillis();
                         overlayVisible = true;
-                        logFile("TCP-MSG id=" + overlay.id);
+                        AppLog.info("TCP-MSG id=" + overlay.id);
                     }
                 }
             }
@@ -439,13 +457,13 @@ public class KindleDroneDetectorPro {
                 shownOverlayId = -1;
                 pageShownAt = System.currentTimeMillis();
                 generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-                logFile("MSG-TIMEOUT -> PAGE->" + PAGE_NAMES[currentPage]);
+                AppLog.info("MSG-TIMEOUT -> PAGE->" + PAGE_NAMES[currentPage]);
             } else if (!overlayVisible && KindleTcpListener.getActiveOverlay() == null && shownOverlayId != -1) {
                 // TCP overlay was cleared externally
                 shownOverlayId = -1;
                 pageShownAt = System.currentTimeMillis();
                 generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-                logFile("MSG done -> PAGE->" + PAGE_NAMES[currentPage]);
+                AppLog.info("MSG done -> PAGE->" + PAGE_NAMES[currentPage]);
             }
 
             // Advance to next page when the hold time has elapsed.
@@ -454,7 +472,8 @@ public class KindleDroneDetectorPro {
                 currentPage = (currentPage + 1) % PAGE_COUNT;
                 pageShownAt = now;
                 generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-                logFile("PAGE->" + PAGE_NAMES[currentPage]);
+                AppLog.info("PAGE->" + PAGE_NAMES[currentPage]);
+                webState.setCurrentPage(PAGE_NAMES[currentPage]);
 
                 // After the radar slot finishes its 30-second hold, the screen is
                 // cleared inside showRadarPage().  Immediately advance to Weather so
@@ -463,13 +482,14 @@ public class KindleDroneDetectorPro {
                     currentPage = PAGE_WEATHER;
                     pageShownAt = System.currentTimeMillis();
                     generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-                    logFile("PAGE->weather (post-radar)");
+                    AppLog.info("PAGE->weather (post-radar)");
+                    webState.setCurrentPage(PAGE_NAMES[currentPage]);
                 }
             }
 
             // CSV + state save is handled in the web-state update block above
 
-            if (ctx.loop % LOG_ROTATE_EVERY == 0) rotateLogIfNeeded();
+            // log rotation is handled automatically by AppLog
 
             long wait = TICK_MS - (System.currentTimeMillis() - t0);
             if (wait > 0) KindleUtils.sleep(wait);
@@ -497,7 +517,7 @@ public class KindleDroneDetectorPro {
                 if (ageMs > INFO_REGEN_MS) {
                     generateInfoImage(page, ctx);
                 } else {
-                    logFile("PAGE-CACHED p=" + page + " age=" + (ageMs / 1000) + "s");
+                    AppLog.info("PAGE-CACHED p=" + page + " age=" + (ageMs / 1000) + "s");
                 }
                 showPngOrFallback(PAGE_FILES[page], ctx, display);
                 break;
@@ -522,7 +542,7 @@ public class KindleDroneDetectorPro {
         try {
             WeatherService.WeatherData latest = WeatherService.fetchWeather(WEATHER_LOCATION);
             ctx.weather = latest;
-            logFile(latest.error == null ? "WX manual:" + latest.temp + "C" : "WX manual ERR");
+            AppLog.info(latest.error == null ? "WX manual:" + latest.temp + "C" : "WX manual ERR");
 
             WifiScanner.sendProbe("manual");
             List<AP> aps = WifiScanner.scan();
@@ -547,9 +567,9 @@ public class KindleDroneDetectorPro {
             if (maxThreat > ctx.statPeakThreat) {
                 ctx.statPeakThreat = maxThreat;
             }
-            logFile("MANUAL scan aps=" + aps.size() + " thr=" + maxThreat + (firstRun ? " FIRST_RUN" : ""));
+            AppLog.info("MANUAL scan aps=" + aps.size() + " thr=" + maxThreat + (firstRun ? " FIRST_RUN" : ""));
         } catch (Exception e) {
-            logFile("MANUAL refresh err=" + e.getMessage());
+            AppLog.info("MANUAL refresh err=" + e.getMessage());
         }
 
         return System.currentTimeMillis();
@@ -570,13 +590,13 @@ public class KindleDroneDetectorPro {
         List<AP> radarAps = buildRadarAps(ctx, firstRun);
 
         if (radarAps.isEmpty()) {
-            logFile("RADAR empty, skip");
+            AppLog.info("RADAR empty, skip");
             return;
         }
 
         // Render + display (eips -g is called inside radarMgr.renderAndShow)
         boolean shown = radarMgr.renderAndShow(radarAps, ctx);
-        logFile("RADAR shown=" + shown + " aps=" + radarAps.size()
+        AppLog.info("RADAR shown=" + shown + " aps=" + radarAps.size()
                 + (firstRun ? " FIRST_RUN" : " NEW_ONLY"));
 
         if (shown) {
@@ -648,7 +668,7 @@ public class KindleDroneDetectorPro {
                     break;
             }
         } catch (Exception e) {
-            logFile("INFO-ERR p=" + page + " " + e.getMessage());
+            AppLog.info("INFO-ERR p=" + page + " " + e.getMessage());
         }
     }
 
@@ -677,7 +697,7 @@ public class KindleDroneDetectorPro {
             display.clearForPageSwitch("msg-fallback");
             KindleUtils.exec("eips", "0", "8", "MESSAGE");
             KindleUtils.exec("eips", "0", "10", text);
-            logFile("MSG render fallback: " + e.getMessage());
+            AppLog.info("MSG render fallback: " + e.getMessage());
         }
     }
 
@@ -775,21 +795,20 @@ public class KindleDroneDetectorPro {
     // =========================================================================
 
     static int loadNetworksCsv(Map<String, NetRecord> knownNets, Set<String> baseline) {
-        int count = NetCsvStore.load(CSV_FILE, knownNets, baseline,
-                KindleDroneDetectorPro::logFile);
-        if (count > 0) System.out.println("CSV: " + count + " nets");
+        int count = NetCsvStore.load(CSV_FILE, knownNets, baseline, AppLog::info);
+        if (count > 0) AppLog.info("CSV: " + count + " nets");
         return count;
     }
 
     static void saveNetworksCsv(Map<String, NetRecord> knownNets) {
-        NetCsvStore.save(CSV_TMP, CSV_FILE, knownNets, KindleDroneDetectorPro::logFile);
+        NetCsvStore.save(CSV_TMP, CSV_FILE, knownNets, AppLog::info);
     }
 
     static void saveNetworksCsv(Map<String, NetRecord> knownNets, AppDataManager dm) {
         if (dm != null) {
             NetCsvStore.save(dm.getCsvTempFile().getAbsolutePath(),
                              dm.getCsvFile().getAbsolutePath(),
-                             knownNets, KindleDroneDetectorPro::logFile);
+                             knownNets, AppLog::info);
         } else {
             saveNetworksCsv(knownNets);
         }
@@ -803,11 +822,11 @@ public class KindleDroneDetectorPro {
                            boolean firstRun, RadarImageManager radarMgr, String src) {
         current = (current + 1) % PAGE_COUNT;
         generateAndShowPage(current, ctx, display, firstRun, radarMgr);
-        logFile(src + " PAGE->" + PAGE_NAMES[current]);
+        AppLog.info(src + " PAGE->" + PAGE_NAMES[current]);
         if (current == PAGE_RADAR) {
             current = PAGE_WEATHER;
             generateAndShowPage(current, ctx, display, firstRun, radarMgr);
-            logFile(src + " PAGE->weather (post-radar)");
+            AppLog.info(src + " PAGE->weather (post-radar)");
         }
         return current;
     }
@@ -843,7 +862,7 @@ public class KindleDroneDetectorPro {
                 knownNets.put(a.mac, nr);
                 if (ctx.armed && !baseline.contains(a.mac)) {
                     ctx.statNewArmed++;
-                    logFile("NEW " + a.mac + " " + a.ssid + " " + (int) a.dist + "m");
+                    AppLog.info("NEW " + a.mac + " " + a.ssid + " " + (int) a.dist + "m");
                 }
             }
             nr.update(a);
@@ -853,10 +872,10 @@ public class KindleDroneDetectorPro {
                 String nm = (a.ssid != null && !a.ssid.isEmpty()
                         && !"[HIDDEN]".equals(a.ssid)) ? a.ssid : a.mac;
                 if (nr.surgeDetected) {
-                    logFile("SURGE " + nm + " +" + nr.surgeRawDelta + "dBm " + nr.lastDistM + "m");
+                    AppLog.info("SURGE " + nm + " +" + nr.surgeRawDelta + "dBm " + nr.lastDistM + "m");
                 }
                 if (nr.consecutiveApproach == 3) {
-                    logFile("APPROACH " + nm + " " + nr.lastDistM + "m");
+                    AppLog.info("APPROACH " + nm + " " + nr.lastDistM + "m");
                 }
             }
         }
@@ -867,65 +886,32 @@ public class KindleDroneDetectorPro {
     }
 
     // =========================================================================
-    // Logging
+    // Logging  (file I/O delegated to AppLog; only formatting lives here)
     // =========================================================================
 
-    static PrintWriter logWriter = null;
-
-    static void openLogFile() {
-        try {
-            logWriter = new PrintWriter(new BufferedWriter(new OutputStreamWriter(
-                    new FileOutputStream(LOG_FILE, true),
-                    java.nio.charset.StandardCharsets.UTF_8)), true);
-            logWriter.println("--- START " + new Date() + " ---");
-        } catch (IOException e) {
-            System.err.println("log open: " + e.getMessage());
-        }
-    }
-
-    static void rotateLogIfNeeded() {
-        try {
-            File f = new File(LOG_FILE);
-            if (f.length() < LOG_MAX_BYTES) return;
-            if (logWriter != null) logWriter.close();
-            File bak = new File(LOG_FILE + ".1");
-            if (bak.exists()) bak.delete();
-            f.renameTo(bak);
-            openLogFile();
-        } catch (Exception e) {
-            System.err.println("log rotate: " + e.getMessage());
-        }
-    }
-
-    static void logFile(String msg) {
-        if (logWriter != null) logWriter.printf("%tT %s%n", System.currentTimeMillis(), msg);
-    }
-
-    /** Compact console log — only notable APs. */
+    /** Compact console+file log — only notable APs, written on every scan. */
     static void log(List<AP> aps, DetectorContext ctx) {
         int notable = 0;
         for (AP a : aps) {
             History h = ctx.temporal.get(a.mac);
             if (a.threat > 0 || (h != null && (h.isNew || h.isMoving))) notable++;
         }
-        System.out.printf("#%d APs:%d notable:%d CRC+%d NF:%d%s%n",
+        AppLog.info(String.format("#%d APs:%d notable:%d CRC+%d NF:%d%s",
                 ctx.loop, aps.size(), notable, ctx.crcDelta, ctx.noiseFloor,
-                ctx.externalRF ? " !!RF" : "");
+                ctx.externalRF ? " !!RF" : ""));
         for (AP a : aps) {
             History h = ctx.temporal.get(a.mac);
             if (a.threat < 30 && (h == null || (!h.isNew && !h.isMoving))) continue;
-            System.out.printf("  %3d %-17s %-12s %4ddBm %4.0fm %s%n",
-                    a.threat, a.mac, a.ssid, a.signalDbm, a.dist, a.flags);
+            AppLog.info(String.format("  %3d %-17s %-12s %4ddBm %4.0fm %s",
+                    a.threat, a.mac, a.ssid, a.signalDbm, a.dist, a.flags));
         }
     }
 
-    /** File log — compact summary every scan; full AP dump only on notable events. */
+    /** Detailed scan log — compact summary every scan; full AP dump on notable events. */
     static void logLoopToFile(List<AP> aps, int maxThreat, DetectorContext ctx) {
-        if (logWriter == null) return;
-
-        logWriter.printf("%tT #%d AP:%d THR:%d NF:%d%s%n",
-                System.currentTimeMillis(), ctx.loop, aps.size(), maxThreat,
-                ctx.noiseFloor, ctx.externalRF ? " RF" : "");
+        AppLog.info(String.format("#%d AP:%d THR:%d NF:%d%s",
+                ctx.loop, aps.size(), maxThreat,
+                ctx.noiseFloor, ctx.externalRF ? " RF" : ""));
 
         boolean heartbeat = (ctx.loop % HEARTBEAT_EVERY == 0);
         if (maxThreat < DUMP_THREAT_MIN && !ctx.externalRF && !heartbeat) return;
@@ -941,12 +927,12 @@ public class KindleDroneDetectorPro {
                     || (nr != null && (nr.surgeDetected || nr.consecutiveApproach >= 3));
             if (!notable && !(heartbeat && idx <= 3)) { skipped++; continue; }
             int emaM = nr != null && nr.lastDistM >= 0 ? nr.lastDistM : (int) a.dist;
-            logWriter.printf("  %s %-17s %-12s %3ddBm %4dm thr=%-3d %s%s%s [%s]%n",
+            AppLog.info(String.format("  %s %-17s %-12s %3ddBm %4dm thr=%-3d %s%s%s [%s]",
                     ctx.baseline.contains(a.mac) ? "B" : "N",
                     a.mac, a.ssid, a.signalDbm, emaM, a.threat,
                     isNew ? "N" : "-", isMov ? "M" : "-",
-                    a.ghost ? "G" : "-", a.flags);
+                    a.ghost ? "G" : "-", a.flags));
         }
-        if (skipped > 0) logWriter.printf("  +%d bg%n", skipped);
+        if (skipped > 0) AppLog.info(String.format("  +%d bg", skipped));
     }
 }

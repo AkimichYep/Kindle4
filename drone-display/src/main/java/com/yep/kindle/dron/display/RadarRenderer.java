@@ -11,6 +11,7 @@ import java.util.Map;
 
 import com.yep.kindle.dron.detection.MovementMetrics;
 import com.yep.kindle.dron.model.AP;
+import com.yep.kindle.dron.util.AppLog;
 
 /**
  * RadarRenderer — pure-Java bitmap radar chart for the Kindle 4 e-ink display.
@@ -437,7 +438,7 @@ public class RadarRenderer {
             System.arraycopy(px, 0, out, 0, px.length);
             ImageIO.write(img, "PNG", tmp);
         } catch (IOException e) {
-            System.err.println("RadarRenderer writePng: " + e.getMessage());
+            AppLog.err("RadarRenderer writePng: " + e.getMessage());
             return;
         }
 
@@ -448,7 +449,7 @@ public class RadarRenderer {
                         java.nio.file.StandardCopyOption.REPLACE_EXISTING);
                 tmp.delete();
             } catch (IOException e) {
-                System.err.println("RadarRenderer rename: " + e.getMessage());
+                AppLog.err("RadarRenderer rename: " + e.getMessage());
             }
         }
         // Copy into the ring-buffer slot for animation playback
@@ -457,7 +458,7 @@ public class RadarRenderer {
             java.nio.file.Files.copy(dest.toPath(), slot.toPath(),
                     java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            System.err.println("RadarRenderer frame copy: " + e.getMessage());
+            AppLog.err("RadarRenderer frame copy: " + e.getMessage());
         }
         nextFrame = (nextFrame + 1) % FRAME_COUNT;
     }

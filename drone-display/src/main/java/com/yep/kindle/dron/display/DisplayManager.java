@@ -3,6 +3,7 @@ package com.yep.kindle.dron.display;
 import java.util.Arrays;
 
 import com.yep.kindle.dron.model.DetectorContext;
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 
 /**
@@ -78,7 +79,7 @@ public class DisplayManager {
         KindleUtils.exec("eips", "-c");
         KindleUtils.sleep(100);
         resetCache();
-        if (!logLabel.isEmpty()) System.out.println("DISPLAY -> " + logLabel);
+        if (!logLabel.isEmpty()) AppLog.info("DISPLAY -> " + logLabel);
     }
 
     // =========================================================================

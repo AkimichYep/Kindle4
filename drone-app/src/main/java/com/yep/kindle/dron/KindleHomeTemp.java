@@ -2,6 +2,7 @@ package com.yep.kindle.dron;
 
 import com.yep.kindle.dron.display.KindleCanvas;
 import com.yep.kindle.dron.display.KindleLayoutKit;
+import com.yep.kindle.dron.util.AppLog;
 
 import javax.imageio.ImageIO;
 import java.awt.BasicStroke;
@@ -86,7 +87,7 @@ public class KindleHomeTemp {
         String out = args.length > 0 ? args[0] : "hometemp_test.png";
         BufferedImage img = render(27);
         ImageIO.write(img, "png", new File(out));
-        System.out.println("Saved: " + new File(out).getAbsolutePath());
+        AppLog.info("Saved: " + new File(out).getAbsolutePath());
     }
 
     // ── Public entry point ────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 import com.yep.kindle.dron.model.NetRecord;
+import com.yep.kindle.dron.util.AppLog;
 
 /**
  * CSV persistence for known networks and distance-history codec.
@@ -79,7 +80,7 @@ public final class NetCsvStore {
             }
             log(log, "CSV loaded: " + count + " networks");
         } catch (IOException e) {
-            System.err.println("loadNetworksCsv: " + e.getMessage());
+            AppLog.err("loadNetworksCsv: " + e.getMessage());
         }
         return count;
     }
@@ -119,7 +120,7 @@ public final class NetCsvStore {
                 written++;
             }
         } catch (IOException e) {
-            System.err.println("saveNetworksCsv write: " + e.getMessage());
+            AppLog.err("saveNetworksCsv write: " + e.getMessage());
             return;
         }
 
@@ -128,7 +129,7 @@ public final class NetCsvStore {
                 Files.copy(tmp.toPath(), dest.toPath(), StandardCopyOption.REPLACE_EXISTING);
                 tmp.delete();
             } catch (IOException e) {
-                System.err.println("saveNetworksCsv rename: " + e.getMessage());
+                AppLog.err("saveNetworksCsv rename: " + e.getMessage());
             }
         }
         log(log, "CSV saved: " + written + " networks" + (pruned > 0 ? " (" + pruned + " transient pruned)" : ""));

@@ -13,6 +13,7 @@ public class DeviceState {
     private volatile String statusMessage    = "Ready";
     private volatile long   nextPageSeq      = 0;
     private volatile long   nextPageAckedSeq = 0;
+    private volatile String currentPage      = "weather";
 
     private AppDataManager dataManager = null;
     private volatile AppConfig config = new AppConfig();
@@ -58,6 +59,9 @@ public class DeviceState {
         nextPageAckedSeq = nextPageSeq;
     }
 
+    public String getCurrentPage() { return currentPage; }
+    public void setCurrentPage(String page) { this.currentPage = page; }
+
     // ── AppDataManager reference ──────────────────────────────────────────────
 
     public AppDataManager getDataManager() { return dataManager; }
@@ -67,6 +71,7 @@ public class DeviceState {
 
     AppConfig getConfig() { return config; }
     void setConfig(AppConfig cfg) { this.config = cfg; }
+    public String getConfigCity() { return config.city; }
 
     /** Loads config from the data manager's config file; safe to call if manager is null. */
     public void loadConfig() {

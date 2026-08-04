@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import com.yep.kindle.dron.model.AP;
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 import com.yep.kindle.dron.util.WifiUtils;
 
@@ -36,7 +37,7 @@ public final class WifiScanner {
         KindleUtils.sleep(200);
         KindleUtils.exec("wmiconfig", "-i", "wlan0", "--getTargetStats", "--clearStats");
         KindleUtils.sleep(200);
-        System.out.println("FW: maxperf, 200ms dwell, BSS reporting ON");
+        AppLog.info("FW: maxperf, 200ms dwell, BSS reporting ON");
     }
 
     /**
@@ -115,7 +116,7 @@ public final class WifiScanner {
             r.close();
             p.waitFor();
         } catch (Exception e) {
-            System.err.println("scan err: " + e.getMessage());
+            AppLog.err("scan err: " + e.getMessage());
         } finally {
             if (p != null) p.destroy();
         }

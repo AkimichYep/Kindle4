@@ -6,6 +6,8 @@ import com.yep.kindle.dron.KindleMoonCalendarNoKey;
 import com.yep.kindle.dron.KindleSpaceWeatherNoKey;
 import com.yep.kindle.dron.display.RadarRenderer;
 
+import com.yep.kindle.dron.util.AppLog;
+
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.Executors;
@@ -17,6 +19,7 @@ import java.util.concurrent.Executors;
  * Endpoints:
  *   GET  /                   — dashboard HTML
  *   GET  /gallery            — image gallery HTML
+ *   GET  /logs               — log viewer HTML
  *   GET  /api/status         — JSON: battery, charging, batteryTemp, temperature, status, message
  *   POST /api/message        — send overlay message to Kindle screen (body = plain text)
  *   POST /api/next-page      — advance to next display page
@@ -46,6 +49,7 @@ public class KindleWebServer {
         HttpServer s = HttpServer.create(new InetSocketAddress("0.0.0.0", PORT), 16);
         s.createContext("/",              new WebHandlers.RootHandler());
         s.createContext("/gallery",       new WebHandlers.GalleryHandler(deviceState));
+        s.createContext("/logs",          new WebHandlers.LogsHandler());
         s.createContext("/api/status",    new WebHandlers.StatusHandler(deviceState));
         s.createContext("/api/message",   new WebHandlers.MessageHandler(deviceState));
         s.createContext("/api/next-page", new WebHandlers.NextPageHandler(deviceState));
@@ -56,11 +60,15 @@ public class KindleWebServer {
         s.createContext("/api/moon-refresh",          new WebHandlers.KindleViewHandler(deviceState, "moon.png",         "/mnt/us/drone-app/img/moon.png",         KindleMoonCalendarNoKey::generateAndSave));
         s.createContext("/api/spaceweather-refresh",  new WebHandlers.KindleViewHandler(deviceState, "spaceweather.png", "/mnt/us/drone-app/img/spaceweather.png", KindleSpaceWeatherNoKey::generateAndSave));
         s.createContext("/api/radar-refresh",         new WebHandlers.KindleViewHandler(deviceState, "radar.png",        RadarRenderer.IMAGE_FILE,                 imgPath -> {}));
+        s.createContext("/api/logs",             new WebHandlers.LogsApiHandler());
+        s.createContext("/api/logs/list",        new WebHandlers.LogsListHandler());
+        s.createContext("/api/logs/view",        new WebHandlers.LogsViewHandler());
+        s.createContext("/api/logs/file",        new WebHandlers.LogsFileHandler());
         s.createContext("/health",               new WebHandlers.HealthHandler());
         s.setExecutor(Executors.newFixedThreadPool(2));
         s.start();
         server = s;
-        System.out.println("=== Web UI: http://0.0.0.0:" + PORT + " ===");
+        AppLog.info("=== Web UI: http://0.0.0.0:" + PORT + " ===");
     }
 
     public void stop() {

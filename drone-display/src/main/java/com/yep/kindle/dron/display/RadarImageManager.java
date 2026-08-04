@@ -13,6 +13,7 @@ import com.yep.kindle.dron.model.AP;
 import com.yep.kindle.dron.model.DetectorContext;
 import com.yep.kindle.dron.model.History;
 import com.yep.kindle.dron.service.WeatherService;
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 
 /**
@@ -67,7 +68,7 @@ public class RadarImageManager {
                     newDetection, frameIdx));
             return true;
         } catch (Exception e) {
-            System.err.println("RadarImageManager.renderAndShow: " + e.getMessage());
+            AppLog.err("RadarImageManager.renderAndShow: " + e.getMessage());
             log("RADAR ERROR: " + e.getMessage());
             return false;
         }
@@ -100,7 +101,7 @@ public class RadarImageManager {
             log("RADAR snapshot: " + snapPath);
             pruneSnapshots();
         } catch (IOException e) {
-            System.err.println("radar snapshot: " + e.getMessage());
+            AppLog.err("radar snapshot: " + e.getMessage());
         }
     }
 

@@ -79,7 +79,7 @@ final class DashboardView {
             "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.2}}" +
             "</style></head><body><div class='wrap'>" +
             "<h1>Kindle Drone<span class='dot'></span></h1>" +
-            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a></div>" +
+            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/logs'>Logs</a></div>" +
 
             "<div class='batt-card' id='bcard'>" +
             "<div class='batt-header'>" +
@@ -108,7 +108,7 @@ final class DashboardView {
             "</div>" +
 
             "<div class='actions'>" +
-            "<button class='btn btn-page' onclick='nextPage()'>Next Page</button>" +
+            "<button class='btn btn-page' id='nextBtn' onclick='nextPage()'>Next Page</button>" +
             "<button class='btn btn-refresh' onclick='refresh()'>Refresh</button>" +
             "</div>" +
 
@@ -202,8 +202,14 @@ final class DashboardView {
             "    })" +
             "    .catch(function(){});" +
             "}" +
+            "var PAGE_ORDER=['weather','moon','space','hometemp','weather'];" + // radar skips back to weather
+            "function nextPageName(cur){" +
+            "  var i=PAGE_ORDER.indexOf(cur);" +
+            "  return i>=0?PAGE_ORDER[(i+1)%PAGE_ORDER.length]:PAGE_ORDER[0];" +
+            "}" +
             "function update(d){" +
             "  var b=d.battery;" +
+            "  if(d.currentPage){document.getElementById('nextBtn').textContent='Next → '+nextPageName(d.currentPage);}" +
             "  document.getElementById('bpct').textContent=b>=0?b+'%':'--';" +
             "  var f=document.getElementById('bfill');" +
             "  f.style.width=(b>=0?b:0)+'%';" +
@@ -234,10 +240,14 @@ final class DashboardView {
             "    }).catch(function(){toast('Error','err');});" +
             "}" +
             "function nextPage(){" +
+            "  var btn=document.getElementById('nextBtn');btn.disabled=true;" +
             "  fetch('/api/next-page',{method:'POST'})" +
             "    .then(function(r){return r.json();})" +
-            "    .then(function(){toast('Next page!','ok');})" +
-            "    .catch(function(){toast('Error','err');});" +
+            "    .then(function(){" +
+            "      toast('Advancing to next page…','ok');" +
+            "      setTimeout(function(){btn.disabled=false;loadStatus();},2000);" +
+            "    })" +
+            "    .catch(function(){btn.disabled=false;toast('Connection error','err');});" +
             "}" +
             "function validateCityInput(city){" +
             "  if(!city||city.length<2)return'Too short (min 2 characters)';" +

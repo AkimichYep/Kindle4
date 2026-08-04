@@ -27,7 +27,7 @@ public class KindleUtils {
             p.waitFor();
             return sb.toString().trim();
         } catch (Exception e) {
-            System.err.println("readCommand: " + e.getMessage());
+            AppLog.err("readCommand: " + e.getMessage());
             return null;
         }
     }
@@ -46,7 +46,7 @@ public class KindleUtils {
             errDrain.start();
             p.waitFor();
         } catch (Exception e) {
-            System.err.println("exec: " + e.getMessage());
+            AppLog.err("exec: " + e.getMessage());
         }
     }
 
@@ -75,7 +75,7 @@ public class KindleUtils {
                 Runtime.getRuntime().exec(new String[]{"eips", "0", String.valueOf(y), l}).waitFor();
             }
         } catch (Exception e) {
-            System.err.println("eips: " + e.getMessage());
+            AppLog.err("eips: " + e.getMessage());
         }
     }
 }

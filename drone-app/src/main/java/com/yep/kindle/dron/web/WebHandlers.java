@@ -3,12 +3,19 @@ package com.yep.kindle.dron.web;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.yep.kindle.dron.KindleWeatherNoKey;
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 import com.yep.kindle.dron.util.SensorReader;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 
 final class WebHandlers {
 
@@ -18,7 +25,8 @@ final class WebHandlers {
         public void handle(HttpExchange ex) throws IOException {
             if (!HttpUtils.requireMethod(ex, "GET")) return;
             ex.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
-            ex.getResponseHeaders().set("Cache-Control", "no-cache");
+            ex.getResponseHeaders().set("Cache-Control", "no-store, no-cache, must-revalidate");
+            ex.getResponseHeaders().set("Pragma", "no-cache");
             ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
             HttpUtils.writeResponse(ex, 200, DashboardView.BYTES);
         }
@@ -44,10 +52,11 @@ final class WebHandlers {
             int    roomTemp = SensorReader.readRoomTemperatureCelsius();
             String json = String.format(
                 "{\"battery\":%d,\"charging\":%d,\"batteryTemp\":%.1f,\"temperature\":%d," +
-                "\"status\":\"%s\",\"userMessage\":\"%s\",\"ts\":%d}",
+                "\"status\":\"%s\",\"userMessage\":\"%s\",\"currentPage\":\"%s\",\"ts\":%d}",
                 battery, charging, battTemp, roomTemp,
                 HttpUtils.escapeJson(deviceState.getStatusMessage()),
                 HttpUtils.escapeJson(deviceState.getLastMessage()),
+                HttpUtils.escapeJson(deviceState.getCurrentPage()),
                 System.currentTimeMillis());
             HttpUtils.send(ex, 200, "application/json", json);
         }
@@ -170,6 +179,150 @@ final class WebHandlers {
                     String.format("{\"ok\":false,\"error\":\"%s\"}",
                         HttpUtils.escapeJson(e.getMessage() != null ? e.getMessage() : "unknown")));
             }
+        }
+    }
+
+    static final class LogsHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            ex.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+            ex.getResponseHeaders().set("Cache-Control", "no-cache");
+            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            HttpUtils.writeResponse(ex, 200, LogsView.BYTES);
+        }
+    }
+
+    static final class LogsApiHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            String query = ex.getRequestURI().getQuery();
+            int n = 400;
+            if (query != null && query.startsWith("n=")) {
+                try { n = Math.min(600, Math.max(10, Integer.parseInt(query.substring(2)))); }
+                catch (NumberFormatException ignored) {}
+            }
+            List<String> lines = AppLog.getRecentLines(n);
+            StringBuilder sb = new StringBuilder("{\"errCount\":").append(AppLog.getErrCount())
+                .append(",\"total\":").append(AppLog.getTotalLines())
+                .append(",\"lines\":[");
+            for (int i = 0; i < lines.size(); i++) {
+                if (i > 0) sb.append(',');
+                sb.append('"').append(HttpUtils.escapeJson(lines.get(i))).append('"');
+            }
+            sb.append("]}");
+            HttpUtils.send(ex, 200, "application/json", sb.toString());
+        }
+    }
+
+    static final class LogsFileHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            String mainPath = AppLog.getFilePath();
+            if (mainPath == null) { HttpUtils.send(ex, 404, "text/plain", "Log not configured"); return; }
+            File logDir = new File(mainPath).getParentFile();
+            // if ?name= param present, serve that file; otherwise serve the main log
+            String query = ex.getRequestURI().getQuery();
+            String name = null;
+            if (query != null) {
+                for (String part : query.split("&")) {
+                    if (part.startsWith("name=")) { name = HttpUtils.urlDecode(part.substring(5)); break; }
+                }
+            }
+            File f;
+            if (name != null && !name.isEmpty()) {
+                if (name.contains("/") || name.contains("\\") || name.contains("..") || name.indexOf(0) >= 0) {
+                    HttpUtils.send(ex, 400, "text/plain", "Invalid name"); return;
+                }
+                f = new File(logDir, name);
+            } else {
+                f = new File(mainPath);
+            }
+            if (!f.exists()) { HttpUtils.send(ex, 404, "text/plain", "File not found"); return; }
+            try {
+                byte[] data = Files.readAllBytes(f.toPath());
+                ex.getResponseHeaders().set("Content-Disposition",
+                    "attachment; filename=\"" + f.getName() + "\"");
+                HttpUtils.sendBinary(ex, 200, "text/plain; charset=UTF-8", data);
+            } catch (IOException e) {
+                HttpUtils.send(ex, 500, "text/plain", "Read error");
+            }
+        }
+    }
+
+    static final class LogsListHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            String mainPath = AppLog.getFilePath();
+            if (mainPath == null) { HttpUtils.send(ex, 200, "application/json", "{\"files\":[]}"); return; }
+            File logDir = new File(mainPath).getParentFile();
+            File[] files = logDir.listFiles();
+            StringBuilder sb = new StringBuilder("{\"files\":[");
+            if (files != null) {
+                Arrays.sort(files, (a, b) -> a.getName().compareTo(b.getName()));
+                boolean first = true;
+                for (File file : files) {
+                    if (!file.isFile()) continue;
+                    if (!first) sb.append(',');
+                    first = false;
+                    sb.append("{\"name\":\"").append(HttpUtils.escapeJson(file.getName()))
+                      .append("\",\"size\":").append(file.length())
+                      .append(",\"modified\":").append(file.lastModified())
+                      .append('}');
+                }
+            }
+            sb.append("]}");
+            HttpUtils.send(ex, 200, "application/json", sb.toString());
+        }
+    }
+
+    static final class LogsViewHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            String mainPath = AppLog.getFilePath();
+            if (mainPath == null) { HttpUtils.send(ex, 404, "application/json", "{\"error\":\"Log not configured\"}"); return; }
+            File logDir = new File(mainPath).getParentFile();
+            String query = ex.getRequestURI().getQuery();
+            String name = null;
+            int maxLines = 500;
+            if (query != null) {
+                for (String part : query.split("&")) {
+                    if (part.startsWith("name=")) name = HttpUtils.urlDecode(part.substring(5));
+                    else if (part.startsWith("n=")) {
+                        try { maxLines = Math.min(2000, Math.max(10, Integer.parseInt(part.substring(2)))); }
+                        catch (NumberFormatException ignored) {}
+                    }
+                }
+            }
+            if (name == null || name.isEmpty()) {
+                HttpUtils.send(ex, 400, "application/json", "{\"error\":\"Missing name\"}"); return;
+            }
+            if (name.contains("/") || name.contains("\\") || name.contains("..") || name.indexOf(0) >= 0) {
+                HttpUtils.send(ex, 400, "application/json", "{\"error\":\"Invalid name\"}"); return;
+            }
+            File f = new File(logDir, name);
+            if (!f.exists()) { HttpUtils.send(ex, 404, "application/json", "{\"error\":\"File not found\"}"); return; }
+            List<String> lines = new ArrayList<String>();
+            try {
+                BufferedReader br = new BufferedReader(new FileReader(f));
+                String line;
+                while ((line = br.readLine()) != null) lines.add(line);
+                br.close();
+            } catch (IOException e) {
+                HttpUtils.send(ex, 500, "application/json", "{\"error\":\"Read error\"}"); return;
+            }
+            // return last maxLines lines
+            int from = lines.size() > maxLines ? lines.size() - maxLines : 0;
+            StringBuilder sb = new StringBuilder("{\"name\":\"")
+                .append(HttpUtils.escapeJson(name)).append("\",\"size\":").append(f.length())
+                .append(",\"modified\":").append(f.lastModified())
+                .append(",\"totalLines\":").append(lines.size())
+                .append(",\"lines\":[");
+            for (int i = from; i < lines.size(); i++) {
+                if (i > from) sb.append(',');
+                sb.append('"').append(HttpUtils.escapeJson(lines.get(i))).append('"');
+            }
+            sb.append("]}");
+            HttpUtils.send(ex, 200, "application/json", sb.toString());
         }
     }
 
