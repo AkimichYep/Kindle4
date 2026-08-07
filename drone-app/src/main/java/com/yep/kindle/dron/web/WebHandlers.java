@@ -46,17 +46,37 @@ final class WebHandlers {
         StatusHandler(DeviceState deviceState) { this.deviceState = deviceState; }
         public void handle(HttpExchange ex) throws IOException {
             if (!HttpUtils.requireMethod(ex, "GET")) return;
+
+            // Hardware sensors
             int    battery  = SensorReader.readBatteryPercent();
             int    charging = SensorReader.readIsCharging();
             double battTemp = SensorReader.readBatteryTemperatureCelsius();
             int    roomTemp = SensorReader.readRoomTemperatureCelsius();
+            long   uptime   = SensorReader.readUptimeSeconds();
+
+            // CPU: differential measurement — take two snapshots 400 ms apart.
+            // ejdk-8u211 has no java.lang.management, so we read /proc/stat directly.
+            SensorReader.CpuSnapshot snap1 = SensorReader.readCpuSnapshot();
+            try { Thread.sleep(400); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+            SensorReader.CpuSnapshot snap2 = SensorReader.readCpuSnapshot();
+            int cpuPct = SensorReader.cpuPercent(snap1, snap2);
+
+            // RAM from /proc/meminfo
+            SensorReader.MemInfo mem = SensorReader.readMemInfo();
+
             String json = String.format(
                 "{\"battery\":%d,\"charging\":%d,\"batteryTemp\":%.1f,\"temperature\":%d," +
-                "\"status\":\"%s\",\"userMessage\":\"%s\",\"currentPage\":\"%s\",\"ts\":%d}",
+                "\"status\":\"%s\",\"userMessage\":\"%s\",\"currentPage\":\"%s\"," +
+                "\"cpu\":%d," +
+                "\"ramTotalKiB\":%d,\"ramUsedKiB\":%d,\"ramUsedPct\":%d," +
+                "\"uptimeSec\":%d,\"ts\":%d}",
                 battery, charging, battTemp, roomTemp,
                 HttpUtils.escapeJson(deviceState.getStatusMessage()),
                 HttpUtils.escapeJson(deviceState.getLastMessage()),
                 HttpUtils.escapeJson(deviceState.getCurrentPage()),
+                cpuPct,
+                mem.totalKiB, mem.usedKiB, mem.usedPercent,
+                uptime,
                 System.currentTimeMillis());
             HttpUtils.send(ex, 200, "application/json", json);
         }

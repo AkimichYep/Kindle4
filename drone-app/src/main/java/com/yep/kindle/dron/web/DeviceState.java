@@ -1,9 +1,23 @@
 package com.yep.kindle.dron.web;
 
+import com.yep.kindle.dron.event.AppEvent;
+import com.yep.kindle.dron.event.EventBus;
+
 /**
  * Thread-safe shared state between the detector main loop and the web server.
  * Battery and temperature are NOT stored here — they are read fresh from hardware
  * by SensorReader at the time each web request is served.
+ *
+ * <p><b>Event-driven integration:</b> mutating methods that previously relied on
+ * sequence-number polling now additionally post events to {@link EventBus#INSTANCE}
+ * so the main detector loop wakes up immediately instead of waiting for the next
+ * 5-second tick:</p>
+ * <ul>
+ *   <li>{@link #setMessage} → posts {@link AppEvent.Type#OVERLAY_MESSAGE}</li>
+ *   <li>{@link #requestNextPage} → posts {@link AppEvent.Type#PAGE_ADVANCE}</li>
+ * </ul>
+ * <p>The sequence-number fields are kept for backward-compatibility with any
+ * callers that have not yet been migrated to the event bus.</p>
  */
 public class DeviceState {
 
@@ -29,6 +43,8 @@ public class DeviceState {
             lastMessage     = message.trim();
             lastMessageTime = System.currentTimeMillis();
             messageSeq++;
+            // Wake up the main loop immediately — no need to wait for the next tick.
+            EventBus.INSTANCE.post(AppEvent.overlayMessage(lastMessage, "web"));
         }
     }
 
@@ -48,6 +64,8 @@ public class DeviceState {
 
     public synchronized long requestNextPage() {
         nextPageSeq++;
+        // Wake up the main loop immediately.
+        EventBus.INSTANCE.post(AppEvent.pageAdvance("web"));
         return nextPageSeq;
     }
 

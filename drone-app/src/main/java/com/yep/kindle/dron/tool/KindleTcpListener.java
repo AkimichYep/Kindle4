@@ -14,6 +14,9 @@ import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 
+import com.yep.kindle.dron.event.AppEvent;
+import com.yep.kindle.dron.event.EventBus;
+
 public class KindleTcpListener {
     private static final int PORT = 5555;
     private static final long DEFAULT_OVERLAY_MS = 20_000L;
@@ -84,11 +87,16 @@ public class KindleTcpListener {
             overlayState = new OverlayState(id, cleaned, System.currentTimeMillis() + ttl);
         }
         lastMessage = cleaned;
+        // Wake up the main detector loop immediately via the event bus.
+        EventBus.INSTANCE.post(AppEvent.overlayMessage(cleaned, "tcp"));
         return id;
     }
 
     public static synchronized long requestRefreshAndNextPage() {
-        return ++refreshAndNextSeq;
+        long seq = ++refreshAndNextSeq;
+        // Wake up the main detector loop immediately via the event bus.
+        EventBus.INSTANCE.post(AppEvent.pageAdvance("tcp"));
+        return seq;
     }
 
     public static long getRefreshAndNextPageSeq() {

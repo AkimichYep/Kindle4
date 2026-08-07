@@ -21,6 +21,8 @@ final class DashboardView {
             ".nav{display:flex;gap:8px;justify-content:center;margin-bottom:18px}" +
             ".nav a{padding:5px 14px;background:#1e3a5f;color:#93c5fd;text-decoration:none;border-radius:20px;font-size:13px;font-weight:600}" +
             ".nav a:hover{background:#1d4ed8}" +
+
+            // Battery card
             ".batt-card{background:#1e293b;border-radius:10px;padding:16px;margin-bottom:12px}" +
             ".batt-card.warn{background:#450a0a}" +
             ".batt-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}" +
@@ -29,14 +31,32 @@ final class DashboardView {
             ".batt-bar{height:8px;background:rgba(255,255,255,.1);border-radius:4px;overflow:hidden;margin-bottom:8px}" +
             ".batt-fill{height:100%;border-radius:4px;transition:width .4s,background .4s}" +
             ".batt-sub{font-size:12px;color:#94a3b8}" +
+
+            // 2-col grid for small cards
             ".grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}" +
+            ".grid4{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin-bottom:12px}" +
             ".card{background:#1e293b;border-radius:10px;padding:14px;text-align:center}" +
             ".card-label{font-size:10px;text-transform:uppercase;letter-spacing:1.2px;color:#64748b;margin-bottom:6px}" +
             ".card-val{font-size:28px;font-weight:700;color:#e2e8f0}" +
             ".card-val.sm{font-size:20px}" +
+            ".card-val.warn{color:#f87171}" +
+            ".card-val.ok{color:#4ade80}" +
+            ".card-val.mid{color:#facc15}" +
+
+            // Progress bar inside card (CPU / RAM)
+            ".card-bar{height:5px;background:rgba(255,255,255,.08);border-radius:3px;overflow:hidden;margin-top:7px}" +
+            ".card-bar-fill{height:100%;border-radius:3px;transition:width .5s,background .5s}" +
+            ".card-sub{font-size:10px;color:#64748b;margin-top:5px;line-height:1.4}" +
+
+            // Uptime badge
+            ".uptime-row{text-align:center;font-size:11px;color:#475569;margin-bottom:12px;letter-spacing:.4px}" +
+
+            // Status / message boxes
             ".sec-label{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:5px}" +
             ".info-box{background:#0f172a;border-radius:8px;padding:12px;font-size:13px;line-height:1.5;color:#94a3b8;margin-bottom:12px;min-height:36px;word-break:break-word}" +
             ".info-box.msg{color:#5eead4}" +
+
+            // Inputs / buttons
             ".input-row{display:flex;gap:8px;margin-bottom:12px}" +
             "input[type=text]{flex:1;padding:10px 12px;border:1px solid #1e293b;border-radius:8px;background:#0f172a;color:#e5e7eb;font-size:14px;outline:none}" +
             "input[type=text]:focus{border-color:#3b82f6}" +
@@ -50,13 +70,14 @@ final class DashboardView {
             ".btn-refresh{background:#1e293b;color:#94a3b8;border:1px solid #334155}" +
             ".btn-refresh:active{background:#0f172a}" +
             ".divider{border:none;border-top:1px solid #1e293b;margin:14px 0}" +
+
+            // Kindle view buttons panel
             ".panel-wrap{display:flex;gap:12px;align-items:flex-start}" +
             ".btn-col{flex:1;display:flex;flex-direction:column;gap:10px}" +
             ".preview-col{flex:0 0 120px;display:none}" +
             ".preview-col img{width:120px;height:160px;object-fit:cover;border-radius:8px;border:1px solid #334155;display:block;cursor:pointer}" +
             ".preview-label{font-size:10px;text-transform:uppercase;color:#64748b;margin-top:4px;text-align:center;letter-spacing:.5px}" +
             ".wx-btn-col{position:relative}" +
-            // Tooltip anchored to button column
             ".wx-tip{visibility:hidden;opacity:0;background:#1e293b;color:#94a3b8;border:1px solid #334155;" +
                 "padding:10px 12px;border-radius:8px;position:absolute;z-index:10;top:100%;left:0;right:0;" +
                 "font-size:11px;line-height:1.7;white-space:pre-line;pointer-events:none;transition:opacity .15s;margin-top:4px}" +
@@ -72,15 +93,21 @@ final class DashboardView {
             ".btn-radar{background:#166534;color:#bbf7d0;width:100%;text-align:center}" +
             ".btn-radar:hover{background:#15803d}" +
             ".btn-wx:disabled,.btn-ht:disabled,.btn-moon:disabled,.btn-sw:disabled,.btn-radar:disabled{background:#1e293b;color:#4b5563;cursor:default}" +
+
+            // Toast
             ".toast{text-align:center;padding:8px 12px;border-radius:8px;font-size:12px;margin-top:4px;display:none}" +
             ".toast.ok{background:#064e3b;color:#6ee7b7;display:block}" +
             ".toast.err{background:#450a0a;color:#fca5a5;display:block}" +
+
+            // Pulsing live dot
             ".dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#4ade80;margin-left:6px;vertical-align:middle;animation:pulse 2s infinite}" +
             "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.2}}" +
             "</style></head><body><div class='wrap'>" +
+
             "<h1>Kindle Drone<span class='dot'></span></h1>" +
             "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/logs'>Logs</a></div>" +
 
+            // ── Battery card ──────────────────────────────────────────────────
             "<div class='batt-card' id='bcard'>" +
             "<div class='batt-header'>" +
             "<div><div style='font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#64748b;margin-bottom:4px'>Battery</div>" +
@@ -91,11 +118,33 @@ final class DashboardView {
             "<div class='batt-sub'>Cell temp: <span id='btval'>--</span></div>" +
             "</div>" +
 
+            // ── 4-column grid: Room Temp · Charging · CPU · Uptime ────────────
             "<div class='grid'>" +
             "<div class='card'><div class='card-label'>Room Temp</div><div class='card-val' id='tval'>--</div></div>" +
             "<div class='card'><div class='card-label'>Charging</div><div class='card-val sm' id='cval'>--</div></div>" +
             "</div>" +
 
+            // ── CPU card ──────────────────────────────────────────────────────
+            "<div class='grid'>" +
+            "<div class='card'>" +
+            "<div class='card-label'>CPU</div>" +
+            "<div class='card-val' id='cpuVal'>--</div>" +
+            "<div class='card-bar'><div class='card-bar-fill' id='cpuBar' style='width:0;background:#38bdf8'></div></div>" +
+            "</div>" +
+
+            // ── RAM card ──────────────────────────────────────────────────────
+            "<div class='card'>" +
+            "<div class='card-label'>RAM</div>" +
+            "<div class='card-val' id='ramVal'>--</div>" +
+            "<div class='card-bar'><div class='card-bar-fill' id='ramBar' style='width:0;background:#a78bfa'></div></div>" +
+            "<div class='card-sub' id='ramSub'></div>" +
+            "</div>" +
+            "</div>" +
+
+            // ── Uptime row ────────────────────────────────────────────────────
+            "<div class='uptime-row'>Uptime: <span id='uptimeVal'>--</span></div>" +
+
+            // ── Detector status ───────────────────────────────────────────────
             "<div class='sec-label'>Detector status</div>" +
             "<div class='info-box' id='det'>Loading…</div>" +
 
@@ -178,6 +227,7 @@ final class DashboardView {
             "<div class='toast' id='toast'></div>" +
             "</div>" +
 
+            // ── JavaScript ────────────────────────────────────────────────────
             "<script>" +
             "document.addEventListener('DOMContentLoaded',function(){" +
             "  loadStatus();" +
@@ -186,12 +236,15 @@ final class DashboardView {
             "  document.getElementById('cityIn').addEventListener('keydown',function(e){if(e.key==='Enter')saveCity();});" +
             "  document.getElementById('cityIn').addEventListener('input',function(){this.classList.remove('err');});" +
             "});" +
+
+            // ── Status fetch ──
             "function loadStatus(){" +
             "  fetch('/api/status')" +
             "    .then(function(r){return r.json();})" +
             "    .then(update)" +
             "    .catch(function(){document.getElementById('det').textContent='Offline — tap Refresh';});" +
             "}" +
+
             "function loadConfig(){" +
             "  fetch('/api/config')" +
             "    .then(function(r){return r.json();})" +
@@ -202,25 +255,77 @@ final class DashboardView {
             "    })" +
             "    .catch(function(){});" +
             "}" +
+
+            // ── Update DOM from /api/status response ──
             "function update(d){" +
+            // Battery
             "  var b=d.battery;" +
             "  document.getElementById('bpct').textContent=b>=0?b+'%':'--';" +
             "  var f=document.getElementById('bfill');" +
             "  f.style.width=(b>=0?b:0)+'%';" +
             "  f.style.background=b>30?'#4ade80':b>15?'#facc15':'#f87171';" +
             "  document.getElementById('bcard').className='batt-card'+(b>=0&&b<=15?' warn':'');" +
+            // Charging
             "  var chg=d.charging;" +
             "  var cb=document.getElementById('cbadge');" +
             "  cb.style.display=chg===1?'':'none';" +
             "  document.getElementById('cval').textContent=chg===1?'Yes':chg===0?'No':'—';" +
+            // Temps
             "  var bt=d.batteryTemp;" +
             "  document.getElementById('btval').textContent=bt>=-0?bt.toFixed(1)+'°C':'--';" +
             "  var t=d.temperature;" +
             "  document.getElementById('tval').textContent=t>=0?t+'°C':'--';" +
+            // CPU
+            "  var cpu=d.cpu;" +
+            "  var cpuEl=document.getElementById('cpuVal');" +
+            "  if(cpu>=0){" +
+            "    cpuEl.textContent=cpu+'%';" +
+            "    cpuEl.className='card-val'+(cpu>=80?' warn':cpu>=50?' mid':' ok');" +
+            "    var cpuBar=document.getElementById('cpuBar');" +
+            "    cpuBar.style.width=cpu+'%';" +
+            "    cpuBar.style.background=cpu>=80?'#f87171':cpu>=50?'#facc15':'#38bdf8';" +
+            "  } else {" +
+            "    cpuEl.textContent='--'; cpuEl.className='card-val';" +
+            "  }" +
+            // RAM
+            "  var rp=d.ramUsedPct;" +
+            "  var rt=d.ramTotalKiB;" +
+            "  var ru=d.ramUsedKiB;" +
+            "  var ramEl=document.getElementById('ramVal');" +
+            "  if(rp>=0){" +
+            "    ramEl.textContent=rp+'%';" +
+            "    ramEl.className='card-val'+(rp>=85?' warn':rp>=60?' mid':' ok');" +
+            "    var ramBar=document.getElementById('ramBar');" +
+            "    ramBar.style.width=rp+'%';" +
+            "    ramBar.style.background=rp>=85?'#f87171':rp>=60?'#facc15':'#a78bfa';" +
+            "    var sub=document.getElementById('ramSub');" +
+            "    if(rt>0)sub.textContent=fmt(ru)+' / '+fmt(rt);" +
+            "  } else {" +
+            "    ramEl.textContent='--'; ramEl.className='card-val';" +
+            "  }" +
+            // Uptime
+            "  var up=d.uptimeSec;" +
+            "  document.getElementById('uptimeVal').textContent=up>=0?fmtUptime(up):'--';" +
+            // Status / message
             "  document.getElementById('det').textContent=d.status||'—';" +
             "  var m=d.userMessage;" +
             "  document.getElementById('mdsp').textContent=m&&m.length?m:'—';" +
             "}" +
+
+            // ── Helpers ──
+            // Format KiB → human readable
+            "function fmt(kib){" +
+            "  if(kib<1024)return kib+'K';" +
+            "  return (kib/1024).toFixed(0)+'M';" +
+            "}" +
+            // Format uptime seconds → "2d 3h 14m" etc.
+            "function fmtUptime(s){" +
+            "  var d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60);" +
+            "  if(d>0)return d+'d '+h+'h '+m+'m';" +
+            "  if(h>0)return h+'h '+m+'m';" +
+            "  return m+'m';" +
+            "}" +
+
             "function refresh(){loadStatus();}" +
             "function sendMsg(){" +
             "  var t=document.getElementById('msgIn').value.trim();" +
@@ -245,7 +350,6 @@ final class DashboardView {
             "}" +
             "function validateCityInput(city){" +
             "  if(!city||city.length<2)return'Too short (min 2 characters)';" +
-            // Count Unicode letters with a basic range covering Latin + extended + Cyrillic
             "  var letters=city.replace(/[^a-zA-Z\\u00C0-\\u024F\\u0400-\\u04FF]/g,'').length;" +
             "  if(letters<2)return'Must contain at least 2 letters';" +
             "  return null;" +

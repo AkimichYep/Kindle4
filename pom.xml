@@ -57,6 +57,14 @@
                     <artifactId>maven-jar-plugin</artifactId>
                     <version>3.3.0</version>
                 </plugin>
+                <!-- GraalVM native-maven-plugin: version pinned here so all
+                     child modules that activate the 'native' profile use the
+                     same plugin version without repeating it everywhere. -->
+                <plugin>
+                    <groupId>org.graalvm.buildtools</groupId>
+                    <artifactId>native-maven-plugin</artifactId>
+                    <version>0.10.2</version>
+                </plugin>
             </plugins>
         </pluginManagement>
     </build>

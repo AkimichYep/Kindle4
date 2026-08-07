@@ -1,0 +1,108 @@
+[
+  {
+    "comment": "=== Reflection configuration for GraalVM Native Image ===",
+    "comment2": "Project uses NO reflection-heavy frameworks (no Spring, no Jackson).",
+    "comment3": "Reflection entries here cover only the JDK internals accessed at runtime."
+  },
+  {
+    "name": "java.lang.Thread",
+    "methods": [
+      { "name": "setDaemon",     "parameterTypes": ["boolean"] },
+      { "name": "setName",       "parameterTypes": ["java.lang.String"] },
+      { "name": "start",         "parameterTypes": [] },
+      { "name": "interrupt",     "parameterTypes": [] },
+      { "name": "currentThread", "parameterTypes": [] }
+    ]
+  },
+  {
+    "name": "java.lang.Runtime",
+    "methods": [
+      { "name": "exec",          "parameterTypes": ["[Ljava.lang.String;"] },
+      { "name": "addShutdownHook","parameterTypes": ["java.lang.Thread"] }
+    ]
+  },
+  {
+    "name": "java.lang.Process",
+    "methods": [
+      { "name": "getInputStream", "parameterTypes": [] },
+      { "name": "getErrorStream", "parameterTypes": [] },
+      { "name": "waitFor",        "parameterTypes": [] },
+      { "name": "destroy",        "parameterTypes": [] }
+    ]
+  },
+  {
+    "name": "java.net.InetAddress",
+    "methods": [
+      { "name": "getLocalHost",   "parameterTypes": [] },
+      { "name": "getHostAddress", "parameterTypes": [] }
+    ]
+  },
+  {
+    "name": "java.awt.image.BufferedImage",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "java.awt.Graphics2D",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "java.awt.Font",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "javax.imageio.ImageIO",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.sun.net.httpserver.HttpServer",
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.sun.net.httpserver.HttpHandler",
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.yep.kindle.dron.event.AppEvent$Type",
+    "allDeclaredFields": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.yep.kindle.dron.web.AppConfig",
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.yep.kindle.dron.model.AP",
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.yep.kindle.dron.model.NetRecord",
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.yep.kindle.dron.model.History",
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.yep.kindle.dron.model.DetectorContext",
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  },
+  {
+    "name": "com.yep.kindle.dron.service.WeatherService$WeatherData",
+    "allDeclaredFields": true,
+    "allDeclaredConstructors": true,
+    "allDeclaredMethods": true
+  }
+]
