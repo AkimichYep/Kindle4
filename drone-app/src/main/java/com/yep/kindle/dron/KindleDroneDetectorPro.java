@@ -1,15 +1,5 @@
 package com.yep.kindle.dron;
 
-import java.io.*;
-import java.awt.Color;
-import java.awt.Font;
-import java.awt.FontMetrics;
-import java.awt.Graphics2D;
-import java.awt.RenderingHints;
-import java.awt.image.BufferedImage;
-import java.util.*;
-import javax.imageio.ImageIO;
-
 import com.yep.kindle.dron.detection.TemporalEngine;
 import com.yep.kindle.dron.detection.ThreatScorer;
 import com.yep.kindle.dron.display.DisplayManager;
@@ -25,12 +15,19 @@ import com.yep.kindle.dron.model.NetRecord;
 import com.yep.kindle.dron.service.NetCsvStore;
 import com.yep.kindle.dron.service.WeatherService;
 import com.yep.kindle.dron.service.WifiScanner;
-import com.yep.kindle.dron.tool.KindleTcpListener;
 import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 import com.yep.kindle.dron.web.AppDataManager;
 import com.yep.kindle.dron.web.DeviceState;
 import com.yep.kindle.dron.web.KindleWebServer;
+
+import javax.imageio.ImageIO;
+import java.awt.*;
+import java.awt.image.BufferedImage;
+import java.io.File;
+import java.io.IOException;
+import java.util.*;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -259,9 +256,6 @@ public class KindleDroneDetectorPro {
         generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
         AppLog.info("PAGE->weather");
         webState.setCurrentPage(PAGE_NAMES[currentPage]);
-
-        boolean listenerStarted = KindleTcpListener.startAsync();
-        AppLog.info(listenerStarted ? "TCP listener started on :5555" : "TCP listener already running");
 
         try {
             java.net.InetAddress ia = java.net.InetAddress.getLocalHost();
