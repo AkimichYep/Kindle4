@@ -192,6 +192,8 @@ public class KindleDroneDetectorPro {
 
         dataManager = new AppDataManager(APP_DIR);
         webState.setDataManager(dataManager);
+        webState.setWifiMonitor(new com.yep.kindle.dron.web.WifiMonitor());
+        webState.setChipStatsMonitor(new com.yep.kindle.dron.web.ChipStatsMonitor());
         webState.loadConfig();
         KindleHomeTemp.setCsvPath(dataManager.getHomeTempCsvFile().getAbsolutePath());
 
@@ -512,6 +514,17 @@ public class KindleDroneDetectorPro {
                         break;
                     }
 
+                    // ── Rotation toggle from web UI ───────────────────────────
+                    case ROTATION_TOGGLE: {
+                        boolean on = (ev.value == 1);
+                        AppLog.info("ROTATION " + (on ? "ON" : "OFF"));
+                        if (on) {
+                            // Reset timer so the current page gets its full hold after re-enable
+                            pageShownAt = System.currentTimeMillis();
+                        }
+                        break;
+                    }
+
                     default:
                         break;
                 }
@@ -519,7 +532,8 @@ public class KindleDroneDetectorPro {
 
             // ── Page auto-advance timer (checked on every wakeup) ─────────────
             long now = System.currentTimeMillis();
-            if (!overlayVisible && !radarHoldActive && now - pageShownAt >= PAGE_HOLD_MS) {
+            if (!overlayVisible && !radarHoldActive && webState.isRotationEnabled()
+                    && now - pageShownAt >= PAGE_HOLD_MS) {
                 currentPage = (currentPage + 1) % PAGE_COUNT;
                 pageShownAt = now;
                 generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);

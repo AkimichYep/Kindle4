@@ -21,16 +21,19 @@ import com.yep.kindle.dron.event.EventBus;
  */
 public class DeviceState {
 
-    private volatile String lastMessage      = "";
-    private volatile long   lastMessageTime  = System.currentTimeMillis();
-    private volatile long   messageSeq       = 0;
-    private volatile String statusMessage    = "Ready";
-    private volatile long   nextPageSeq      = 0;
-    private volatile long   nextPageAckedSeq = 0;
-    private volatile String currentPage      = "weather";
+    private volatile String  lastMessage      = "";
+    private volatile long    lastMessageTime  = System.currentTimeMillis();
+    private volatile long    messageSeq       = 0;
+    private volatile String  statusMessage    = "Ready";
+    private volatile long    nextPageSeq      = 0;
+    private volatile long    nextPageAckedSeq = 0;
+    private volatile String  currentPage      = "weather";
+    private volatile boolean rotationEnabled  = true;
 
-    private AppDataManager dataManager = null;
-    private volatile AppConfig config = new AppConfig();
+    private AppDataManager   dataManager       = null;
+    private WifiMonitor      wifiMonitor       = null;
+    private ChipStatsMonitor chipStatsMonitor  = null;
+    private volatile AppConfig config          = new AppConfig();
 
     // ── Messages (trigger overlay on Kindle screen) ───────────────────────────
 
@@ -80,10 +83,27 @@ public class DeviceState {
     public String getCurrentPage() { return currentPage; }
     public void setCurrentPage(String page) { this.currentPage = page; }
 
+    // ── Rotation control ──────────────────────────────────────────────────────
+
+    public boolean isRotationEnabled() { return rotationEnabled; }
+
+    public synchronized void setRotationEnabled(boolean enabled) {
+        rotationEnabled = enabled;
+        EventBus.INSTANCE.post(AppEvent.rotationToggle(enabled, "web"));
+    }
+
     // ── AppDataManager reference ──────────────────────────────────────────────
 
     public AppDataManager getDataManager() { return dataManager; }
     public void setDataManager(AppDataManager manager) { this.dataManager = manager; }
+
+    // ── WifiMonitor reference ─────────────────────────────────────────────────
+
+    public WifiMonitor getWifiMonitor() { return wifiMonitor; }
+    public void setWifiMonitor(WifiMonitor monitor) { this.wifiMonitor = monitor; }
+
+    public ChipStatsMonitor getChipStatsMonitor() { return chipStatsMonitor; }
+    public void setChipStatsMonitor(ChipStatsMonitor monitor) { this.chipStatsMonitor = monitor; }
 
     // ── App config (city etc.) ────────────────────────────────────────────────
 

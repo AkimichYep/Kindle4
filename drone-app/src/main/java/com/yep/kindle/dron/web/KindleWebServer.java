@@ -30,8 +30,15 @@ import java.util.concurrent.Executors;
  *   POST /api/hometemp-refresh    — read PMIC sensor, update history CSV, show hometemp PNG on Kindle
  *   POST /api/moon-refresh        — generate moon calendar PNG, show on Kindle
  *   POST /api/spaceweather-refresh — fetch NOAA space weather, show PNG on Kindle
- *   POST /api/radar-refresh       — re-display current radar.png on Kindle
- *   GET  /health             — "ok"
+ *   POST /api/radar-refresh             — re-display current radar.png on Kindle
+ *   POST /api/rotation                  — toggle (or set) display rotation; body: "true"/"false"/empty
+ *   POST /api/wifi-monitor/start        — start aggressive WiFi scan (2-second interval)
+ *   POST /api/wifi-monitor/stop         — stop WiFi scan
+ *   GET  /api/wifi-monitor/stream       — SSE stream of scan results (text/event-stream)
+ *   POST /api/rf-monitor/start          — start passive RF sensor (AR6003 CRC delta, 2-second interval)
+ *   POST /api/rf-monitor/stop           — stop RF sensor
+ *   GET  /api/rf-monitor/stream         — SSE stream of RF events (type:rf/rf-log/rf-status)
+ *   GET  /health                        — "ok"
  */
 public class KindleWebServer {
 
@@ -60,12 +67,20 @@ public class KindleWebServer {
         s.createContext("/api/moon-refresh",          new WebHandlers.KindleViewHandler(deviceState, "moon.png",         "/mnt/us/drone-app/img/moon.png",         KindleMoonCalendarNoKey::generateAndSave, "moon"));
         s.createContext("/api/spaceweather-refresh",  new WebHandlers.KindleViewHandler(deviceState, "spaceweather.png", "/mnt/us/drone-app/img/spaceweather.png", KindleSpaceWeatherNoKey::generateAndSave, "space"));
         s.createContext("/api/radar-refresh",         new WebHandlers.KindleViewHandler(deviceState, "radar.png",        RadarRenderer.IMAGE_FILE,                 imgPath -> {},                            "radar"));
+        s.createContext("/api/rotation",              new WebHandlers.RotationHandler(deviceState));
+        s.createContext("/api/wifi-monitor/start",    new WebHandlers.WifiMonitorStartHandler(deviceState));
+        s.createContext("/api/wifi-monitor/stop",     new WebHandlers.WifiMonitorStopHandler(deviceState));
+        s.createContext("/api/wifi-monitor/stream",   new WebHandlers.WifiMonitorStreamHandler(deviceState));
+        s.createContext("/api/rf-monitor/start",      new WebHandlers.RfMonitorStartHandler(deviceState));
+        s.createContext("/api/rf-monitor/stop",       new WebHandlers.RfMonitorStopHandler(deviceState));
+        s.createContext("/api/rf-monitor/stream",     new WebHandlers.RfMonitorStreamHandler(deviceState));
         s.createContext("/api/logs",             new WebHandlers.LogsApiHandler());
         s.createContext("/api/logs/list",        new WebHandlers.LogsListHandler());
         s.createContext("/api/logs/view",        new WebHandlers.LogsViewHandler());
         s.createContext("/api/logs/file",        new WebHandlers.LogsFileHandler());
         s.createContext("/health",               new WebHandlers.HealthHandler());
-        s.setExecutor(Executors.newFixedThreadPool(2));
+        // 6 threads: normal requests + wifi-monitor SSE + rf-monitor SSE + concurrent scan/poll
+        s.setExecutor(Executors.newFixedThreadPool(6));
         s.start();
         server = s;
         AppLog.info("=== Web UI: http://0.0.0.0:" + PORT + " ===");

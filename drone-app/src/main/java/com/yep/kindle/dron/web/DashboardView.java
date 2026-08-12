@@ -69,6 +69,35 @@ final class DashboardView {
             ".btn-page:active{background:#064e3b}" +
             ".btn-refresh{background:#1e293b;color:#94a3b8;border:1px solid #334155}" +
             ".btn-refresh:active{background:#0f172a}" +
+            ".btn-rotation-on{background:#1e3a8a;color:#bfdbfe;border:none}" +
+            ".btn-rotation-off{background:#78350f;color:#fde68a;border:none}" +
+            ".btn-monitor-off{background:#1c1917;color:#a16207;border:1px solid #92400e}" +
+            ".btn-monitor-on{background:#14532d;color:#86efac;border:none;animation:mpulse 1.5s infinite}" +
+            "@keyframes mpulse{0%,100%{opacity:1}50%{opacity:.65}}" +
+            ".mon-wrap{display:none;margin-bottom:12px}" +
+            ".mon-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}" +
+            ".mon-count{font-size:11px;color:#64748b;font-family:monospace}" +
+            ".mon-drone{font-size:11px;color:#f87171;font-weight:700;font-family:monospace}" +
+            ".btn-mon-clear{padding:2px 8px;font-size:10px;font-weight:600;background:#1e293b;color:#64748b;border:1px solid #334155;border-radius:4px;cursor:pointer;text-transform:uppercase;letter-spacing:.5px}" +
+            ".mon-tbl{width:100%;border-collapse:collapse;font-size:11px;font-family:monospace}" +
+            ".mon-tbl th{text-transform:uppercase;letter-spacing:.7px;color:#475569;font-weight:600;padding:3px 5px;border-bottom:1px solid #1e293b;text-align:left}" +
+            ".mon-tbl td{padding:3px 5px;border-bottom:1px solid #0a0a0a;white-space:nowrap;overflow:hidden;max-width:130px;text-overflow:ellipsis}" +
+            ".mon-dr{background:rgba(127,0,0,.25)}" +
+            ".mon-dr td{color:#fca5a5}" +
+            ".mon-flag{color:#f87171;font-weight:700;width:16px;text-align:center;max-width:16px}" +
+            ".mon-g{color:#4ade80}" +
+            ".mon-y{color:#facc15}" +
+            ".mon-r{color:#f87171}" +
+            ".mon-status{font-size:10px;color:#475569;margin-top:4px;font-family:monospace;text-align:right}" +
+            ".btn-rf-off{background:#1c1917;color:#a16207;border:1px solid #92400e}" +
+            ".btn-rf-on{background:#1e1b4b;color:#a5b4fc;border:none;animation:mpulse 1.5s infinite}" +
+            ".rf-wrap{margin-bottom:12px}" +
+            ".rf-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}" +
+            ".rf-alert{font-size:11px;font-weight:700;color:#f87171;background:rgba(127,0,0,.3);padding:2px 8px;border-radius:4px;display:none}" +
+            ".rf-bars{display:flex;gap:2px;align-items:flex-end;height:44px;margin-bottom:3px;background:#0a0a0a;border-radius:4px;padding:4px}" +
+            ".rf-bar{flex:1;border-radius:2px 2px 0 0;transition:height .3s,background .3s;min-height:3px}" +
+            ".rf-footer{display:flex;justify-content:space-between;align-items:center}" +
+            ".rf-stat{font-size:10px;color:#475569;font-family:monospace}" +
             ".divider{border:none;border-top:1px solid #1e293b;margin:14px 0}" +
 
             // Kindle view buttons panel
@@ -159,6 +188,39 @@ final class DashboardView {
             "<div class='actions'>" +
             "<button class='btn btn-page' id='nextBtn' onclick='nextPage()'>Next Page</button>" +
             "<button class='btn btn-refresh' onclick='refresh()'>Refresh</button>" +
+            "</div>" +
+
+            "<div class='actions'>" +
+            "<button class='btn btn-rf-off' id='rfBtn' onclick='toggleRf()'>RF Monitor</button>" +
+            "<div id='rfCur' style='font-size:11px;font-family:monospace;color:#64748b;align-self:center;text-align:right'></div>" +
+            "</div>" +
+            "<div class='rf-wrap' id='rfWrap' style='display:none'>" +
+            "<div class='rf-hdr'>" +
+            "<span style='font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#64748b'>Passive RF · AR6003 CRC/2s</span>" +
+            "<span class='rf-alert' id='rfAlert'>!! SPIKE</span>" +
+            "</div>" +
+            "<div class='rf-bars' id='rfBars'></div>" +
+            "<div class='rf-footer'>" +
+            "<div class='rf-stat' id='rfStatus'></div>" +
+            "<div class='rf-stat' id='rfRssi'></div>" +
+            "</div>" +
+            "</div>" +
+
+            "<div class='actions'>" +
+            "<button class='btn btn-rotation-on' id='rotBtn' onclick='toggleRotation()'>Rotation: ON</button>" +
+            "<button class='btn btn-monitor-off' id='monBtn' onclick='toggleMonitor()'>WiFi Monitor</button>" +
+            "</div>" +
+
+            "<div class='mon-wrap' id='monWrap'>" +
+            "<div class='mon-hdr'>" +
+            "<span><span class='mon-count' id='monCount'>0 APs</span>" +
+            "<span class='mon-drone' id='monDrone'></span></span>" +
+            "<button class='btn-mon-clear' onclick='clearMonitor()'>Clear</button>" +
+            "</div>" +
+            "<table class='mon-tbl'><thead><tr>" +
+            "<th></th><th>SSID</th><th>ch</th><th>dBm</th><th>sec</th>" +
+            "</tr></thead><tbody id='monTbody'></tbody></table>" +
+            "<div class='mon-status' id='monStatus'></div>" +
             "</div>" +
 
             "<hr class='divider'>" +
@@ -404,6 +466,169 @@ final class DashboardView {
             "  var el=document.getElementById('toast');" +
             "  el.textContent=msg;el.className='toast '+cls;" +
             "  setTimeout(function(){el.className='toast';},4000);" +
+            "}" +
+
+            // ── Rotation toggle ──
+            "var rotationOn=true;" +
+            "function toggleRotation(){" +
+            "  rotationOn=!rotationOn;" +
+            "  fetch('/api/rotation',{method:'POST',headers:{'Content-Type':'text/plain'},body:String(rotationOn)})" +
+            "    .then(function(r){return r.json();})" +
+            "    .then(function(d){" +
+            "      rotationOn=d.rotation;" +
+            "      updateRotBtn();" +
+            "      toast('Rotation '+(rotationOn?'enabled':'paused'),'ok');" +
+            "    }).catch(function(){toast('Error','err');});" +
+            "}" +
+            "function updateRotBtn(){" +
+            "  var b=document.getElementById('rotBtn');" +
+            "  if(rotationOn){b.textContent='Rotation: ON';b.className='btn btn-rotation-on';}" +
+            "  else{b.textContent='Rotation: OFF';b.className='btn btn-rotation-off';}" +
+            "}" +
+
+            // ── WiFi Monitor ──
+            "var monitorRunning=false;" +
+            "var monEs=null;" +
+            "var apMap={};" +
+            "function toggleMonitor(){" +
+            "  if(monitorRunning) stopMonitor(); else startMonitor();" +
+            "}" +
+            "function startMonitor(){" +
+            "  fetch('/api/wifi-monitor/start',{method:'POST'})" +
+            "    .then(function(r){return r.json();})" +
+            "    .then(function(){" +
+            "      monitorRunning=true;" +
+            "      updateMonBtn();" +
+            "      openMonitorStream();" +
+            "      toast('WiFi monitor started','ok');" +
+            "    }).catch(function(){toast('Monitor start error','err');});" +
+            "}" +
+            "function stopMonitor(){" +
+            "  fetch('/api/wifi-monitor/stop',{method:'POST'})" +
+            "    .then(function(r){return r.json();})" +
+            "    .then(function(){" +
+            "      monitorRunning=false;" +
+            "      updateMonBtn();" +
+            "      if(monEs){monEs.close();monEs=null;}" +
+            "      toast('WiFi monitor stopped','ok');" +
+            "    }).catch(function(){toast('Monitor stop error','err');});" +
+            "}" +
+            "function updateMonBtn(){" +
+            "  var b=document.getElementById('monBtn');" +
+            "  var wrap=document.getElementById('monWrap');" +
+            "  if(monitorRunning){" +
+            "    b.textContent='Stop Monitor';b.className='btn btn-monitor-on';" +
+            "    wrap.style.display='block';" +
+            "  } else {" +
+            "    b.textContent='WiFi Monitor';b.className='btn btn-monitor-off';" +
+            "  }" +
+            "}" +
+            "function openMonitorStream(){" +
+            "  if(monEs){monEs.close();}" +
+            "  monEs=new EventSource('/api/wifi-monitor/stream');" +
+            "  monEs.onmessage=function(e){" +
+            "    try{var d=JSON.parse(e.data);appendMonLine(d);}catch(ex){}" +
+            "  };" +
+            "  monEs.onerror=function(){" +
+            "    if(!monitorRunning)monEs.close();" +
+            "  };" +
+            "}" +
+            "function appendMonLine(d){" +
+            "  if(d.type==='ap'){" +
+            "    apMap[d.mac]=d;" +
+            "  } else if(d.type==='status'){" +
+            "    renderApTable();" +
+            "    document.getElementById('monStatus').textContent=d.msg;" +
+            "  } else if(d.type==='log'){" +
+            "    document.getElementById('monStatus').textContent='['+d.level+'] '+d.msg;" +
+            "  }" +
+            "}" +
+            "function clearMonitor(){" +
+            "  apMap={};" +
+            "  document.getElementById('monTbody').innerHTML='';" +
+            "  document.getElementById('monCount').textContent='0 APs';" +
+            "  document.getElementById('monDrone').textContent='';" +
+            "  document.getElementById('monStatus').textContent='';" +
+            "}" +
+            "function renderApTable(){" +
+            "  var aps=Object.keys(apMap).map(function(k){return apMap[k];});" +
+            "  aps.sort(function(a,b){" +
+            "    if(a.drone&&!b.drone)return -1;" +
+            "    if(!a.drone&&b.drone)return 1;" +
+            "    return (b.rssi||0)-(a.rssi||0);" +
+            "  });" +
+            "  var dc=aps.filter(function(a){return a.drone;}).length;" +
+            "  document.getElementById('monCount').textContent=aps.length+' APs';" +
+            "  var dEl=document.getElementById('monDrone');" +
+            "  dEl.textContent=dc>0?' | !! '+dc+' DRONE'+(dc>1?'S':''):'';" +
+            "  var html='';" +
+            "  for(var i=0;i<aps.length;i++){" +
+            "    var a=aps[i];" +
+            "    var rc=a.drone?'mon-dr':'';" +
+            "    var rssiCls=a.rssi>=-70?'mon-g':a.rssi>=-85?'mon-y':'mon-r';" +
+            "    var ssid=(a.ssid&&a.ssid.length>13)?a.ssid.substring(0,12)+'\\u2026':a.ssid||'?';" +
+            "    html+='<tr class=\"'+rc+'\" title=\"'+a.mac+'\">'+" +
+            "      '<td class=\"mon-flag\">'+(a.drone?'!!':'')+'</td>'+" +
+            "      '<td>'+ssid+'</td>'+" +
+            "      '<td>'+a.ch+'</td>'+" +
+            "      '<td class=\"'+rssiCls+'\">'+a.rssi+'</td>'+" +
+            "      '<td>'+a.wpa+'</td>'+" +
+            "      '</tr>';" +
+            "  }" +
+            "  document.getElementById('monTbody').innerHTML=html;" +
+            "}" +
+
+            // ── RF Monitor ──
+            "var rfRunning=false,rfEs=null,rfHist=[],rfBase=0;" +
+            "function toggleRf(){if(rfRunning)stopRf();else startRf();}" +
+            "function startRf(){" +
+            "  fetch('/api/rf-monitor/start',{method:'POST'})" +
+            "    .then(function(r){return r.json();})" +
+            "    .then(function(){rfRunning=true;updateRfBtn();openRfStream();toast('RF monitor started','ok');})" +
+            "    .catch(function(){toast('RF start error','err');});" +
+            "}" +
+            "function stopRf(){" +
+            "  fetch('/api/rf-monitor/stop',{method:'POST'})" +
+            "    .then(function(r){return r.json();})" +
+            "    .then(function(){rfRunning=false;updateRfBtn();if(rfEs){rfEs.close();rfEs=null;}toast('RF monitor stopped','ok');})" +
+            "    .catch(function(){toast('RF stop error','err');});" +
+            "}" +
+            "function updateRfBtn(){" +
+            "  var b=document.getElementById('rfBtn'),w=document.getElementById('rfWrap');" +
+            "  if(rfRunning){b.textContent='Stop RF';b.className='btn btn-rf-on';w.style.display='block';}" +
+            "  else{b.textContent='RF Monitor';b.className='btn btn-rf-off';}" +
+            "}" +
+            "function openRfStream(){" +
+            "  if(rfEs)rfEs.close();" +
+            "  rfEs=new EventSource('/api/rf-monitor/stream');" +
+            "  rfEs.onmessage=function(e){try{handleRfEvent(JSON.parse(e.data));}catch(x){}};" +
+            "  rfEs.onerror=function(){if(!rfRunning&&rfEs){rfEs.close();rfEs=null;}};" +
+            "}" +
+            "function handleRfEvent(d){" +
+            "  if(d.type==='rf'){" +
+            "    rfHist.push(d.crc);if(rfHist.length>20)rfHist.shift();rfBase=d.baseline;" +
+            "    renderRfBars();" +
+            "    var cur=document.getElementById('rfCur');if(cur)cur.textContent='crc='+d.crc+' base='+d.baseline;" +
+            "    document.getElementById('rfStatus').textContent='crc='+d.crc+' base='+d.baseline+(d.alert?' SPIKE!':'');" +
+            "    document.getElementById('rfRssi').textContent='rssi='+d.rssi+' snr='+d.snr;" +
+            "    document.getElementById('rfAlert').style.display=d.alert?'inline-block':'none';" +
+            "  } else if(d.type==='rf-log'){" +
+            "    document.getElementById('rfStatus').textContent='['+d.level+'] '+d.msg;" +
+            "  } else if(d.type==='rf-status'){" +
+            "    document.getElementById('rfStatus').textContent=d.msg;" +
+            "  }" +
+            "}" +
+            "function renderRfBars(){" +
+            "  var el=document.getElementById('rfBars');if(!el)return;" +
+            "  var max=1;for(var i=0;i<rfHist.length;i++)if(rfHist[i]>max)max=rfHist[i];" +
+            "  var thresh=rfBase>0?Math.max(rfBase*4,rfBase+50):0;" +
+            "  var html='';" +
+            "  for(var i=0;i<rfHist.length;i++){" +
+            "    var v=rfHist[i],h=Math.max(3,Math.round(v/max*100));" +
+            "    var c=thresh>0&&v>thresh?'#f87171':thresh>0&&v*2>thresh?'#facc15':'#4ade80';" +
+            "    html+='<div class=\"rf-bar\" style=\"height:'+h+'%;background:'+c+'\"></div>';" +
+            "  }" +
+            "  el.innerHTML=html;" +
             "}" +
             "</script></body></html>";
     }

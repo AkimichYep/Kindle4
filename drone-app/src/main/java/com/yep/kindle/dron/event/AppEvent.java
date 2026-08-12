@@ -35,7 +35,8 @@ public final class AppEvent {
         DRONE_ALERT,
         SAVE_DUE,
         MAXPERF_DUE,
-        PBANK_CHECK_DUE
+        PBANK_CHECK_DUE,
+        ROTATION_TOGGLE
     }
 
     // ── Fields ────────────────────────────────────────────────────────────────
@@ -138,6 +139,11 @@ public final class AppEvent {
     /** Periodic power-bank keepalive check tick. */
     public static AppEvent pbankCheckDue() {
         return new AppEvent(Type.PBANK_CHECK_DUE, null, 0, "ScanScheduler");
+    }
+
+    /** Display rotation enabled/disabled from web UI. value=1 means enabled. */
+    public static AppEvent rotationToggle(boolean enabled, String source) {
+        return new AppEvent(Type.ROTATION_TOGGLE, null, enabled ? 1 : 0, source);
     }
 
     // ── Object ────────────────────────────────────────────────────────────────

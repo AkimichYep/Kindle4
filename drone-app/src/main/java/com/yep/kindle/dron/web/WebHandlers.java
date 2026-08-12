@@ -11,6 +11,7 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -346,6 +347,228 @@ final class WebHandlers {
             }
             sb.append("]}");
             HttpUtils.send(ex, 200, "application/json", sb.toString());
+        }
+    }
+
+    // ── Rotation toggle ───────────────────────────────────────────────────────
+
+    static final class RotationHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        RotationHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            // Body "true" / "false", or omit to toggle
+            String body = HttpUtils.readTextParam(ex);
+            boolean enabled;
+            if ("true".equalsIgnoreCase(body))       enabled = true;
+            else if ("false".equalsIgnoreCase(body)) enabled = false;
+            else                                     enabled = !deviceState.isRotationEnabled();
+
+            deviceState.setRotationEnabled(enabled);
+            AppLog.info("[WEB] rotation=" + enabled);
+            HttpUtils.send(ex, 200, "application/json",
+                String.format("{\"ok\":true,\"rotation\":%b}", enabled));
+        }
+    }
+
+    // ── WiFi monitor start / stop / SSE stream ────────────────────────────────
+
+    static final class WifiMonitorStartHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        WifiMonitorStartHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            WifiMonitor mon = deviceState.getWifiMonitor();
+            if (mon == null) {
+                HttpUtils.send(ex, 503, "application/json", "{\"ok\":false,\"error\":\"Monitor not initialized\"}");
+                return;
+            }
+            boolean started = mon.start();
+            AppLog.info("[WEB] wifi-monitor start already=" + !started);
+            HttpUtils.send(ex, 200, "application/json",
+                String.format("{\"ok\":true,\"running\":true,\"started\":%b}", started));
+        }
+    }
+
+    static final class WifiMonitorStopHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        WifiMonitorStopHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            WifiMonitor mon = deviceState.getWifiMonitor();
+            if (mon == null) {
+                HttpUtils.send(ex, 503, "application/json", "{\"ok\":false,\"error\":\"Monitor not initialized\"}");
+                return;
+            }
+            boolean stopped = mon.stop();
+            AppLog.info("[WEB] wifi-monitor stop wasRunning=" + stopped);
+            HttpUtils.send(ex, 200, "application/json",
+                String.format("{\"ok\":true,\"running\":false,\"stopped\":%b}", stopped));
+        }
+    }
+
+    /**
+     * Server-Sent Events stream for the WiFi monitor.
+     *
+     * <p>Endpoint: {@code GET /api/wifi-monitor/stream}<br>
+     * Content-Type: {@code text/event-stream}<br>
+     * Each SSE event carries one JSON object from {@link WifiMonitor#pollLine}.</p>
+     *
+     * <p>The handler blocks in a loop draining the monitor queue until the client
+     * disconnects (detected by {@code OutputStream.write} throwing {@link IOException})
+     * or the monitor is stopped (queue returns {@code null} for > 30 s).</p>
+     */
+    static final class WifiMonitorStreamHandler implements HttpHandler {
+        private static final long POLL_TIMEOUT_MS  = 5_000L;
+        private static final int  MAX_IDLE_POLLS   = 6;   // ~30 s of no data → heartbeat then exit
+        private final DeviceState deviceState;
+        WifiMonitorStreamHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            WifiMonitor mon = deviceState.getWifiMonitor();
+            if (mon == null) {
+                HttpUtils.send(ex, 503, "text/plain", "Monitor not initialized");
+                return;
+            }
+
+            ex.getResponseHeaders().set("Content-Type",  "text/event-stream; charset=UTF-8");
+            ex.getResponseHeaders().set("Cache-Control", "no-cache");
+            ex.getResponseHeaders().set("Connection",    "keep-alive");
+            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            ex.sendResponseHeaders(200, 0);   // 0 = chunked / keep-alive
+
+            OutputStream os = ex.getResponseBody();
+            AppLog.info("[STREAM] client connected");
+            int idleCount = 0;
+            try {
+                // Send initial state immediately so the browser knows the monitor status
+                String init = "{\"type\":\"init\",\"running\":" + mon.isRunning() + "}";
+                os.write(("data: " + init + "\n\n").getBytes(StandardCharsets.UTF_8));
+                os.flush();
+
+                while (true) {
+                    String line;
+                    try {
+                        line = mon.pollLine(POLL_TIMEOUT_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    if (line == null) {
+                        idleCount++;
+                        // Heartbeat comment keeps the TCP connection alive through proxies
+                        os.write(": heartbeat\n\n".getBytes(StandardCharsets.UTF_8));
+                        os.flush();
+                        if (idleCount >= MAX_IDLE_POLLS && !mon.isRunning()) break;
+                        continue;
+                    }
+                    idleCount = 0;
+                    os.write(("data: " + line + "\n\n").getBytes(StandardCharsets.UTF_8));
+                    os.flush();
+                }
+            } catch (IOException ignored) {
+                // Client disconnected — normal exit
+            } finally {
+                AppLog.info("[STREAM] client disconnected");
+                try { os.close(); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    // ── RF monitor start / stop / SSE stream ─────────────────────────────────
+
+    static final class RfMonitorStartHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        RfMonitorStartHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            ChipStatsMonitor mon = deviceState.getChipStatsMonitor();
+            if (mon == null) {
+                HttpUtils.send(ex, 503, "application/json", "{\"ok\":false,\"error\":\"RF monitor not initialized\"}");
+                return;
+            }
+            boolean started = mon.start();
+            AppLog.info("[WEB] rf-monitor start already=" + !started);
+            HttpUtils.send(ex, 200, "application/json",
+                String.format("{\"ok\":true,\"running\":true,\"started\":%b}", started));
+        }
+    }
+
+    static final class RfMonitorStopHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        RfMonitorStopHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            ChipStatsMonitor mon = deviceState.getChipStatsMonitor();
+            if (mon == null) {
+                HttpUtils.send(ex, 503, "application/json", "{\"ok\":false,\"error\":\"RF monitor not initialized\"}");
+                return;
+            }
+            boolean stopped = mon.stop();
+            AppLog.info("[WEB] rf-monitor stop wasRunning=" + stopped);
+            HttpUtils.send(ex, 200, "application/json",
+                String.format("{\"ok\":true,\"running\":false,\"stopped\":%b}", stopped));
+        }
+    }
+
+    static final class RfMonitorStreamHandler implements HttpHandler {
+        private static final long POLL_TIMEOUT_MS = 5_000L;
+        private static final int  MAX_IDLE_POLLS  = 6;
+        private final DeviceState deviceState;
+        RfMonitorStreamHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            ChipStatsMonitor mon = deviceState.getChipStatsMonitor();
+            if (mon == null) {
+                HttpUtils.send(ex, 503, "text/plain", "RF monitor not initialized");
+                return;
+            }
+
+            ex.getResponseHeaders().set("Content-Type",  "text/event-stream; charset=UTF-8");
+            ex.getResponseHeaders().set("Cache-Control", "no-cache");
+            ex.getResponseHeaders().set("Connection",    "keep-alive");
+            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            ex.sendResponseHeaders(200, 0);
+
+            OutputStream os = ex.getResponseBody();
+            AppLog.info("[RF-STREAM] client connected");
+            int idleCount = 0;
+            try {
+                String init = "{\"type\":\"rf-init\",\"running\":" + mon.isRunning() + "}";
+                os.write(("data: " + init + "\n\n").getBytes(StandardCharsets.UTF_8));
+                os.flush();
+
+                while (true) {
+                    String line;
+                    try {
+                        line = mon.pollLine(POLL_TIMEOUT_MS);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                    if (line == null) {
+                        idleCount++;
+                        os.write(": heartbeat\n\n".getBytes(StandardCharsets.UTF_8));
+                        os.flush();
+                        if (idleCount >= MAX_IDLE_POLLS && !mon.isRunning()) break;
+                        continue;
+                    }
+                    idleCount = 0;
+                    os.write(("data: " + line + "\n\n").getBytes(StandardCharsets.UTF_8));
+                    os.flush();
+                }
+            } catch (IOException ignored) {
+            } finally {
+                AppLog.info("[RF-STREAM] client disconnected");
+                try { os.close(); } catch (IOException ignored) {}
+            }
         }
     }
 
