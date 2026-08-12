@@ -86,3 +86,4 @@ logs/
 tmp/
 temp/
 
+/my-vault/

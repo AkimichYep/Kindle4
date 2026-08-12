@@ -1,0 +1,20 @@
+{
+  "comment": "=== Resource configuration for GraalVM Native Image ===",
+  "comment2": "Patterns must match the classpath-relative resource path used by Class.getResourceAsStream().",
+
+  "resources": {
+    "includes": [
+      {
+        "pattern": "font/.*\\.ttf",
+        "comment": "Weather icon font served by KindleTcpListener on GET /font/<file>"
+      },
+      {
+        "pattern": "font/.*\\.woff2?",
+        "comment": "WOFF/WOFF2 variants of the weather icon font"
+      }
+    ],
+    "excludes": []
+  },
+
+  "bundles": []
+}

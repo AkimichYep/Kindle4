@@ -1,0 +1,7 @@
+[
+  {
+    "comment": "=== Proxy configuration for GraalVM Native Image ===",
+    "comment2": "Dynamic proxies are used only by com.sun.net.httpserver internals.",
+    "comment3": "All HTTP handler classes are concrete — no dynamic proxies needed."
+  }
+]

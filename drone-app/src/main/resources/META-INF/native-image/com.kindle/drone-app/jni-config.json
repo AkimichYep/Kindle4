@@ -1,0 +1,10 @@
+[
+  {
+    "comment": "=== JNI configuration for GraalVM Native Image ===",
+    "comment2": "The application does not use JNI directly.",
+    "comment3": "The Kindle's 'eips' and 'wmiconfig' utilities are invoked via Runtime.exec(),",
+    "comment4": "NOT via JNI, so no entries are required here.",
+    "comment5": "com.sun.net.httpserver is a JDK built-in — accessed via its public API,",
+    "comment6": "not via JNI. AWT uses JNI internally but is handled by GraalVM's AWT support."
+  }
+]
