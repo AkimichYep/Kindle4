@@ -1,6 +1,7 @@
 package com.yep.kindle.dron.web;
 
 import com.sun.net.httpserver.HttpServer;
+import com.yep.kindle.dron.KindleDateTime;
 import com.yep.kindle.dron.KindleHomeTemp;
 import com.yep.kindle.dron.KindleMoonCalendarNoKey;
 import com.yep.kindle.dron.KindleSpaceWeatherNoKey;
@@ -69,6 +70,7 @@ public class KindleWebServer {
         s.createContext("/api/config",           new WebHandlers.ConfigHandler(deviceState));
         s.createContext("/api/weather-refresh",  new WebHandlers.WeatherRefreshHandler(deviceState));
         s.createContext("/api/hometemp-refresh",     new WebHandlers.KindleViewHandler(deviceState, "hometemp.png",    "/mnt/us/drone-app/img/hometemp.png",    KindleHomeTemp::generateAndSave,          "hometemp"));
+        s.createContext("/api/datetime-refresh",     new WebHandlers.KindleViewHandler(deviceState, "datetime.png",    "/mnt/us/drone-app/img/datetime.png",    KindleDateTime::generateAndSave,          "datetime"));
         s.createContext("/api/moon-refresh",          new WebHandlers.KindleViewHandler(deviceState, "moon.png",         "/mnt/us/drone-app/img/moon.png",         KindleMoonCalendarNoKey::generateAndSave, "moon"));
         s.createContext("/api/spaceweather-refresh",  new WebHandlers.KindleViewHandler(deviceState, "spaceweather.png", "/mnt/us/drone-app/img/spaceweather.png", KindleSpaceWeatherNoKey::generateAndSave, "space"));
         s.createContext("/api/radar-refresh",         new WebHandlers.KindleViewHandler(deviceState, "radar.png",        RadarRenderer.IMAGE_FILE,                 imgPath -> {},                            "radar"));

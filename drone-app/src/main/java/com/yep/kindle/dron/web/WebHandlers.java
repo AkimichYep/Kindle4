@@ -69,7 +69,7 @@ final class WebHandlers {
 
             String json = String.format(
                 "{\"battery\":%d,\"charging\":%d,\"batteryTemp\":%.1f,\"temperature\":%d," +
-                "\"status\":\"%s\",\"userMessage\":\"%s\",\"currentPage\":\"%s\"," +
+                "\"status\":\"%s\",\"userMessage\":\"%s\",\"currentPage\":\"%s\",\"rotationEnabled\":%b," +
                 "\"cpu\":%d," +
                 "\"ramTotalKiB\":%d,\"ramUsedKiB\":%d,\"ramUsedPct\":%d," +
                 "\"uptimeSec\":%d,\"ts\":%d}",
@@ -77,6 +77,7 @@ final class WebHandlers {
                 HttpUtils.escapeJson(deviceState.getStatusMessage()),
                 HttpUtils.escapeJson(deviceState.getLastMessage()),
                 HttpUtils.escapeJson(deviceState.getCurrentPage()),
+                deviceState.isRotationEnabled(),
                 cpuPct,
                 mem.totalKiB, mem.usedKiB, mem.usedPercent,
                 uptime,
