@@ -53,6 +53,33 @@ public class DisplayManager {
         switchAndDiff("history", sc);
     }
 
+    /** Render the funny day of week and time page with retro CRT scanline animation. */
+    public void showTimePage(DetectorContext ctx) {
+        String[] sc = ScreenBuilder.buildTimeScreen(ctx);
+        switchAndDiffAnimated("time", sc, 60); // 60ms delay per row = ~2.4s top-to-bottom animation
+    }
+
+    /**
+     * Animated page switch: forces a full clear if switching pages, then draws row-by-row top-to-bottom
+     * with a small delay for a retro CRT scanline effect.
+     */
+    private void switchAndDiffAnimated(String pageName, String[] sc, long lineDelayMs) {
+        // ALWAYS do a full clear when coming to 'time' page to wipe any background PNG pixels
+        KindleUtils.exec("eips", "-c");
+        KindleUtils.sleep(150);
+        Arrays.fill(screenCache, "");
+        currentPage = pageName;
+
+        for (int y = 0; y < KindleUtils.ROWS; y++) {
+            String l = sc[y] != null ? sc[y] : "";
+            if (!l.isEmpty()) {
+                KindleUtils.exec("eips", "0", String.valueOf(y), l);
+            }
+            screenCache[y] = l;
+            KindleUtils.sleep(lineDelayMs);
+        }
+    }
+
     // =========================================================================
     // Radar image display helpers
     // =========================================================================

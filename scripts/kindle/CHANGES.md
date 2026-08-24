@@ -1,5 +1,17 @@
 # Kindle Drone Script Changes
 
+Date: 2026-08-24 (Date-Time Transition View & Scanline Animation)
+
+## What was changed
+
+- **New Date & Time Transition View (`time`)**: Added a 10-second transition screen between auto-rotating display pages showing local day of week, giant `HH:MM` time in `@` block characters, date, and daily funny drone quotes.
+- **Low-Power Text-Only Rendering**: Rendered via native Kindle `eips` framebuffer commands rather than generating PNG images, saving CPU cycles, RAM, and e-ink flash wear.
+- **Animated Row-by-Row Reveal**: Displays line-by-line top-to-bottom with a 60 ms per-row delay for a retro CRT scanline effect (~2.4s total reveal animation).
+- **System Timezone Sync**: Added `KindleUtils.syncSystemTimeZone()` at app startup to compare `date +%H` from system shell with Java UTC hour and set `TimeZone.setDefault()`, fixing EEST (+0300) daylight saving offset discrepancies on embedded JVMs.
+- **Full Screen Clear Fix**: Fixed an issue where transitioning from PNG pages left residual pixels by ensuring `display.clearForPageSwitch()` resets display caches and clears the screen prior to text/time rendering.
+
+---
+
 Date: 2026-07-29 (button mapping fix + install-script hardening)
 
 ## What was changed

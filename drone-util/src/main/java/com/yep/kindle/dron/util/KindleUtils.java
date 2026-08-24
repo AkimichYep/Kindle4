@@ -32,6 +32,29 @@ public class KindleUtils {
         }
     }
 
+    /**
+     * Synchronizes Java's default TimeZone with the Kindle system Linux `date` time.
+     * On Kindle Linux embedded JVMs, `date +%z` reports standard EET (+0200), but system time is in EEST (+0300)
+     * during Daylight Saving Time. We compare system `date +%H` directly with JVM UTC to set the exact offset.
+     */
+    public static void syncSystemTimeZone() {
+        try {
+            String sysHourStr = readCommand("date", "+%H");
+            if (sysHourStr != null && sysHourStr.matches("\\d{1,2}")) {
+                int sysHour = Integer.parseInt(sysHourStr);
+                java.util.Calendar utcCal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
+                int utcHour = utcCal.get(java.util.Calendar.HOUR_OF_DAY);
+                int diffHours = (sysHour - utcHour + 24) % 24;
+                if (diffHours > 12) diffHours -= 24;
+                String gmtTz = String.format("GMT%+03d:00", diffHours);
+                java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(gmtTz));
+                AppLog.info("Synced Java TimeZone via sysHour diff (sysDate=" + sysHour + "h, utc=" + utcHour + "h): " + gmtTz);
+            }
+        } catch (Exception e) {
+            AppLog.err("syncSystemTimeZone failed: " + e.getMessage());
+        }
+    }
+
     public static void exec(String... cmd) {
         try {
             Process p = Runtime.getRuntime().exec(cmd);

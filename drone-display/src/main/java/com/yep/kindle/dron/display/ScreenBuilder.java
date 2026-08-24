@@ -1,7 +1,9 @@
 package com.yep.kindle.dron.display;
 
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -15,9 +17,7 @@ import com.yep.kindle.dron.util.KindleUtils;
 /**
  * ScreenBuilder — assembles 40×50 character grids for each display page.
  *
- * Responsible for: weather page and history page.  All methods are pure in
- * the sense that they take their data as parameters and return a String[]
- * without touching the display hardware.
+ * Responsible for: weather page, history page, and time/day transition page.
  */
 public final class ScreenBuilder {
 
@@ -96,72 +96,62 @@ public final class ScreenBuilder {
             String windDir = KindleFormatUtils.nz(wx.windDir);
             String windSpeed = KindleFormatUtils.nz(wx.windSpeed);
             String windLine;
-            if (windSpeed.equals("0") || windSpeed.equals("--")) {
-                windLine = "  Wind: Calm";
+            if (!windDir.isEmpty() && !windSpeed.isEmpty()) {
+                windLine = String.format("  Wind: %s @ %s", windDir, windSpeed);
+            } else if (!windSpeed.isEmpty()) {
+                windLine = String.format("  Wind: %s", windSpeed);
             } else {
-                windLine = String.format("  Wind: %s km/h %s", windSpeed, windDir);
+                windLine = "  Wind: n/a";
             }
             sc[row++] = pad(windLine);
+        }
 
-            // Update timestamp with quality indicator
-            long ageSec = (now - wx.updatedAt) / 1000L;
-            String freshness = ageSec < 300 ? "[FRESH]" : ageSec < 1800 ? "[OK]" : "[STALE]";
-            String ageStr;
-            if (ageSec < 60) ageStr = "just now";
-            else if (ageSec < 3600) ageStr = (ageSec / 60) + "m";
-            else if (ageSec < 86400) ageStr = (ageSec / 3600) + "h";
-            else ageStr = (ageSec / 86400) + "d";
-            sc[row++] = pad(String.format("  Updated: %s ago %s", ageStr, freshness));
+        sc[row++] = pad(LINE_H);
+        sc[row++] = pad(String.format("  RF Noise: %d dBm  |  CRC Delta: +%d", ctx.noiseFloor, ctx.crcDelta));
+        sc[row++] = pad(LINE_H);
+
+        Map<String, NetRecord> knownNets = ctx.knownNets;
+        Set<String> baseline = ctx.baseline;
+        List<NetRecord> threats = new ArrayList<>();
+        int activeCount = 0;
+        for (NetRecord nr : knownNets.values()) {
+            if (nr.lastSeen >= now - 60_000L) activeCount++;
+            if (!baseline.contains(nr.mac) || nr.surgeDetected || nr.consecutiveApproach >= 3) {
+                threats.add(nr);
+            }
+        }
+        threats.sort((a, b) -> Integer.compare(b.peakSignal, a.peakSignal));
+
+        sc[row++] = pad(String.format("  ACTIVE APs: %d  |  SUSPECTS/NEW: %d", activeCount, threats.size()));
+        sc[row++] = pad(LINE_H);
+
+        int maxThreatRows = KindleUtils.ROWS - row - 3;
+        if (threats.isEmpty()) {
+            sc[row++] = pad("  (no active threats or new networks)");
+        } else {
+            sc[row++] = pad("  MAC / SSID        RSSI   DIST   STATUS");
+            for (int i = 0; i < threats.size() && i < maxThreatRows; i++) {
+                NetRecord nr = threats.get(i);
+                String name = (nr.ssid != null && !nr.ssid.isEmpty() && !"[HIDDEN]".equals(nr.ssid))
+                        ? nr.ssid : nr.mac;
+                if (name.length() > 14) name = name.substring(0, 14);
+
+                String status = nr.surgeDetected ? "SURGE!"
+                        : nr.consecutiveApproach >= 3 ? "APPROACH"
+                        : !baseline.contains(nr.mac) ? "NEW" : "ACTIVE";
+
+                int dist = nr.lastDistM >= 0 ? nr.lastDistM
+                        : (!nr.distHistory.isEmpty() ? nr.distHistory.peekLast() : -1);
+                String distStr = dist >= 0 ? String.format("%3dm", dist) : " n/a";
+
+                sc[row++] = pad(String.format("  %-16s %4ddBm %5s  %s", name, nr.peakSignal, distStr, status));
+            }
+        }
+
+        while (row < KindleUtils.ROWS - 1) {
             sc[row++] = pad("");
         }
-
-        sc[row++] = pad(LINE_H);
-
-        // Detector status
-        long uptimeSec = (now - ctx.startTime) / 1000L;
-        sc[row++] = pad(String.format("  Up %-8s  Scans %-5d  MACs %d",
-                formatUptime(uptimeSec), ctx.statTotalScans, ctx.knownNets.size()));
-        sc[row++] = pad(String.format("  NF %ddBm  SNR %d  LQ %d  CRC+%d",
-                ctx.noiseFloor, ctx.csSnr, ctx.linkQuality, ctx.crcDelta));
-        if (ctx.statNewArmed > 0 || ctx.statAlertEvents > 0) {
-            sc[row++] = pad(String.format("  >> NEW detections: %-3d  Alerts: %d",
-                    ctx.statNewArmed, ctx.statAlertEvents));
-        }
-        if (ctx.externalRF) {
-            sc[row++] = pad(String.format("  !! EXT RF  iCRC=%d  count=%d/%d",
-                    ctx.idleCRC, ctx.externalRFcount, ctx.idleCrcConfirm));
-        }
-
-        sc[row++] = pad(LINE_H);
-        sc[row++] = pad("  KNOWN THREATS / DRONES");
-
-        // Known-threat records sorted by lastSeen desc
-        List<NetRecord> threats = new ArrayList<>();
-        for (NetRecord nr : ctx.knownNets.values()) {
-            if (nr.keyword || (nr.oui != null && !nr.oui.isEmpty())) threats.add(nr);
-        }
-        threats.sort((a, b) -> Long.compare(b.lastSeen, a.lastSeen));
-
-        int shown = 0;
-        for (NetRecord nr : threats) {
-            if (row >= KindleUtils.ROWS - 2) break;
-            long agoMs  = now - nr.lastSeen;
-            String name = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : nr.mac;
-            if (name.length() > 16) name = name.substring(0, 16);
-            String ouiStr = (nr.oui != null && !nr.oui.isEmpty()) ? nr.oui : "?";
-            if (ouiStr.length() > 6) ouiStr = ouiStr.substring(0, 6);
-            String timeTag = (agoMs < 86_400_000L && nr.obsTime != null && !nr.obsTime.isEmpty())
-                             ? "@" + nr.obsTime : "      ";
-            sc[row++] = pad(String.format("  %-16s %-6s %s %s",
-                    name, ouiStr, timeTag, formatLastSeen(agoMs)));
-            shown++;
-        }
-        if (shown == 0 && row < KindleUtils.ROWS - 1) sc[row++] = pad("  (none detected yet)");
-
-        if (row < KindleUtils.ROWS - 1) {
-            sc[KindleUtils.ROWS - 1] = pad(String.format(
-                    "loop#%d  scan:3min  radar:5min  info:5min", ctx.loop));
-        }
+        sc[KindleUtils.ROWS - 1] = pad(String.format("  Total MACs tracked: %d", knownNets.size()));
         return sc;
     }
 
@@ -169,122 +159,388 @@ public final class ScreenBuilder {
     // History page
     // =========================================================================
 
-    /**
-     * Build the movement-focused distance-history page.
-     */
     public static String[] buildHistoryScreen(DetectorContext ctx) {
         String[] sc = new String[KindleUtils.ROWS];
         fillEmpty(sc);
         int row = 0;
-        long now = System.currentTimeMillis();
 
-        sc[row++] = pad(String.format("* DIST HISTORY  %tT  loop#%d *", now, ctx.loop));
-        sc[row++] = pad(LINE_H);
-        sc[row++] = pad("SSID/MAC     DIST dM/th lastSeen trend");
+        sc[row++] = pad("* DETECTOR HISTORY & METRICS *");
         sc[row++] = pad(LINE_H);
 
-        List<NetRecord> recs = new ArrayList<>(ctx.knownNets.values());
-        recs.sort((a, b) -> {
-            int da = movementScore(a);
-            int db = movementScore(b);
-            if (db != da) return db - da;
-            return Long.compare(b.lastSeen, a.lastSeen);
-        });
-
-        int shown = 0;
-        for (NetRecord nr : recs) {
+        Map<String, NetRecord> knownNets = ctx.knownNets;
+        for (NetRecord nr : knownNets.values()) {
             if (row >= KindleUtils.ROWS - 2) break;
-            if (nr.distHistory.isEmpty()) continue;
-
-            int    dist = nr.lastDistM >= 0 ? nr.lastDistM : nr.distHistory.peekLast();
-            int    dm   = nr.lastDistDeltaM;
-            int    thr  = ctx.scorer.dynamicDistThresholdM(dist);
-            if (shown >= 12 && Math.abs(dm) < 3) continue;
-
             String name = (nr.ssid != null && !nr.ssid.isEmpty()) ? nr.ssid : nr.mac;
-            if (name.length() > 13) name = name.substring(0, 13);
-            String when  = formatLastSeen(now - nr.lastSeen);
-            String spark = MovementMetrics.sparkline(nr.distHistory);
-
-            sc[row++] = pad(String.format("%-11s %3dm%s/%02d %-7s %s%s",
-                    name, dist, MovementMetrics.formatDistDeltaTag(dm), thr,
-                    shortText(when, 7), spark, MovementMetrics.trendArrow(nr.distHistory)));
-            shown++;
+            if (name.length() > 20) name = name.substring(0, 20);
+            sc[row++] = pad(String.format(" %-20s  peak:%4ddBm  seen:%dx", name, nr.peakSignal, nr.seenCount));
         }
 
-        if (shown == 0 && row < KindleUtils.ROWS - 1) sc[row++] = pad("(not enough history yet)");
-        if (row < KindleUtils.ROWS) {
-            sc[KindleUtils.ROWS - 1] = pad("legend: dM/th  +away -closer  trend .oO#");
+        while (row < KindleUtils.ROWS) {
+            sc[row++] = pad("");
         }
         return sc;
     }
 
     // =========================================================================
-    // Movement helpers
+    // Time & Day of Week Transition Page (Huge Font & Width Optimized)
     // =========================================================================
 
-    static int movementScore(NetRecord nr) {
-        int score = Math.abs(nr.lastDistDeltaM) * 3;
-        if (nr.distHistory.size() >= 2) {
-            int min = Integer.MAX_VALUE, max = Integer.MIN_VALUE;
-            for (int d : nr.distHistory) {
-                if (d < min) min = d;
-                if (d > max) max = d;
-            }
-            score += (max - min);
+    public static String[] buildTimeScreen(DetectorContext ctx) {
+        Calendar cal = Calendar.getInstance();
+        return buildTimeScreenForCalendar(ctx, cal);
+    }
+
+    public static String[] buildTimeScreenForDay(DetectorContext ctx, int dayOfWeek) {
+        Calendar cal = Calendar.getInstance();
+        cal.set(Calendar.DAY_OF_WEEK, dayOfWeek);
+        return buildTimeScreenForCalendar(ctx, cal);
+    }
+
+    public static String[] buildTimeScreenForCalendar(DetectorContext ctx, Calendar cal) {
+        String[] sc = new String[KindleUtils.ROWS];
+        for (int i = 0; i < KindleUtils.ROWS; i++) {
+            sc[i] = center("");
         }
-        long ageMs = System.currentTimeMillis() - nr.lastSeen;
-        if (ageMs < 120_000L) score += 10;
-        return score;
+        int row = 0;
+
+        int dayOfWeek = cal.get(Calendar.DAY_OF_WEEK);
+        String dayName = cal.getDisplayName(Calendar.DAY_OF_WEEK, Calendar.LONG, Locale.US);
+        if (dayName == null) dayName = "TODAY";
+        dayName = dayName.toUpperCase();
+
+        int hour = cal.get(Calendar.HOUR_OF_DAY);
+        int min = cal.get(Calendar.MINUTE);
+        String timeDigitsStr = String.format("%02d%02d", hour, min);
+
+        String dateStr = String.format("%tB %td, %tY", cal, cal, cal);
+
+        String quote1 = "";
+        String quote2 = "";
+        switch (dayOfWeek) {
+            case Calendar.MONDAY:
+                quote1 = "Ugh, MONDAY. Even the drones are moving slow.";
+                quote2 = "Warning: Coffee level critical in cockpit.";
+                break;
+            case Calendar.TUESDAY:
+                quote1 = "TUESDAY is just Monday's sneaky twin.";
+                quote2 = "Scanning skies for unauthorized motivation.";
+                break;
+            case Calendar.WEDNESDAY:
+                quote1 = "HUMP DAY! Halfway to the weekend.";
+                quote2 = "Drones report: Weekend is within visual range.";
+                break;
+            case Calendar.THURSDAY:
+                quote1 = "THURSDAY. Friday is within radar range!";
+                quote2 = "Thrusters primed. Overheating anticipation.";
+                break;
+            case Calendar.FRIDAY:
+                quote1 = "TGIF! Arming weekend mode.";
+                quote2 = "Alert: High probability of happy hours!";
+                break;
+            case Calendar.SATURDAY:
+                quote1 = "SATURDAY! Drones are on standby.";
+                quote2 = "Perfect day for a direct visual scan.";
+                break;
+            case Calendar.SUNDAY:
+            default:
+                quote1 = "SUNDAY. Recharging batteries.";
+                quote2 = "Humans and drones alike. Airspace quiet.";
+                break;
+        }
+
+        sc[row++] = center("==================================================");
+        sc[row++] = center("*               TIME FOR A BREAK                 *");
+        sc[row++] = center("==================================================");
+        sc[row++] = center("");
+
+        // Render BIG DAY OF WEEK (5 rows high, auto-scaled to fill up to 45 cols)
+        String[] bigDayRows = renderBigDay(dayName);
+        for (String rLine : bigDayRows) {
+            sc[row++] = center(rLine);
+        }
+        sc[row++] = center("");
+
+        // Render GIANT TIME HH:MM (5 rows high)
+        String[] bigTimeRows = renderBigTime(timeDigitsStr);
+        for (String rLine : bigTimeRows) {
+            sc[row++] = center(rLine);
+        }
+
+        sc[row++] = center(dateStr);
+        sc[row++] = center("");
+        sc[row++] = center("--------------------------------------------------");
+        sc[row++] = center(quote1);
+        sc[row++] = center(quote2);
+        sc[row++] = center("--------------------------------------------------");
+        sc[row++] = center("");
+
+        // Insert ASCII art
+        String[] ascii = getDayAsciiArt(dayOfWeek);
+        for (String line : ascii) {
+            if (row < KindleUtils.ROWS - 2) {
+                sc[row++] = center(line.trim());
+            }
+        }
+
+        while (row < KindleUtils.ROWS - 1) {
+            sc[row++] = center("");
+        }
+
+        sc[KindleUtils.ROWS - 1] = center("Transitioning... Back to scanning in 10s");
+        return sc;
     }
 
     // =========================================================================
-    // String utilities
+    // 6x5 HUGE TIME DIGITS (HH:MM) - Uses dense '@' ASCII blocks for Kindle eips
     // =========================================================================
 
-    /** Truncate/pad a line to exactly COLS characters. */
-    public static String pad(String s) {
-        if (s == null) return "";
-        if (s.length() > KindleUtils.COLS) return s.substring(0, KindleUtils.COLS);
-        return s;
+    private static final String[][] DIGITS_6x5 = {
+        // '0'
+        { "@@@@@@", "@    @", "@    @", "@    @", "@@@@@@" },
+        // '1'
+        { "  @@  ", " @@@  ", "  @@  ", "  @@  ", "@@@@@@" },
+        // '2'
+        { "@@@@@@", "     @", "@@@@@@", "@     ", "@@@@@@" },
+        // '3'
+        { "@@@@@@", "     @", "@@@@@@", "     @", "@@@@@@" },
+        // '4'
+        { "@    @", "@    @", "@@@@@@", "     @", "     @" },
+        // '5'
+        { "@@@@@@", "@     ", "@@@@@@", "     @", "@@@@@@" },
+        // '6'
+        { "@@@@@@", "@     ", "@@@@@@", "@    @", "@@@@@@" },
+        // '7'
+        { "@@@@@@", "     @", "    @@", "   @@ ", "  @@  " },
+        // '8'
+        { "@@@@@@", "@    @", "@@@@@@", "@    @", "@@@@@@" },
+        // '9'
+        { "@@@@@@", "@    @", "@@@@@@", "     @", "@@@@@@" }
+    };
+
+    private static final String[] COLON_6x5 = {
+        "   ",
+        " @ ",
+        "   ",
+        " @ ",
+        "   "
+    };
+
+    private static String[] renderBigTime(String hhmm) {
+        String[] result = new String[5];
+        java.util.Arrays.fill(result, "");
+
+        int d0 = hhmm.charAt(0) - '0';
+        int d1 = hhmm.charAt(1) - '0';
+        int d2 = hhmm.charAt(2) - '0';
+        int d3 = hhmm.charAt(3) - '0';
+
+        for (int r = 0; r < 5; r++) {
+            result[r] = DIGITS_6x5[d0][r] + "  " +
+                        DIGITS_6x5[d1][r] +
+                        COLON_6x5[r] +
+                        DIGITS_6x5[d2][r] + "  " +
+                        DIGITS_6x5[d3][r];
+        }
+        return result;
     }
 
-    /** Truncate string to max characters, or return "--" if null/empty. */
-    public static String shortText(String s, int max) {
-        if (s == null || s.isEmpty()) return "--";
-        return s.length() > max ? s.substring(0, max) : s;
+    // =========================================================================
+    // DYNAMIC WIDE DAY LETTERS - Scales to use all available 50 columns!
+    // =========================================================================
+
+    private static String[] renderBigDay(String dayName) {
+        String[] result = new String[5];
+        java.util.Arrays.fill(result, "");
+
+        int len = dayName.length();
+
+        for (int i = 0; i < len; i++) {
+            char c = dayName.charAt(i);
+            String[] letter = getBigLetterScaled(c, len);
+            for (int r = 0; r < 5; r++) {
+                result[r] += letter[r] + (i < len - 1 ? (len <= 6 ? "  " : " ") : "");
+            }
+        }
+        return result;
     }
 
-    /** Format seconds as H:MM:SS. */
-    public static String formatUptime(long secs) {
-        long h = secs / 3600, m = (secs % 3600) / 60, s = secs % 60;
-        return String.format("%d:%02d:%02d", h, m, s);
+    private static String[] getBigLetterScaled(char c, int wordLen) {
+        if (wordLen <= 6) {
+            switch (c) {
+                case 'A': return new String[]{" @@@@ ", "@    @", "@@@@@@", "@    @", "@    @"};
+                case 'B': return new String[]{"@@@@@ ", "@    @", "@@@@@ ", "@    @", "@@@@@ "};
+                case 'C': return new String[]{" @@@@@", "@     ", "@     ", "@     ", " @@@@@"};
+                case 'D': return new String[]{"@@@@@ ", "@    @", "@    @", "@    @", "@@@@@ "};
+                case 'E': return new String[]{"@@@@@@", "@     ", "@@@@@ ", "@     ", "@@@@@@"};
+                case 'F': return new String[]{"@@@@@@", "@     ", "@@@@@ ", "@     ", "@     "};
+                case 'G': return new String[]{" @@@@@", "@     ", "@  @@@", "@    @", " @@@@@"};
+                case 'H': return new String[]{"@    @", "@    @", "@@@@@@", "@    @", "@    @"};
+                case 'I': return new String[]{"@@@@@@", "  @@  ", "  @@  ", "  @@  ", "@@@@@@"};
+                case 'J': return new String[]{"   @@@", "    @@", "    @@", "@   @@", " @@@@ "};
+                case 'K': return new String[]{"@   @@", "@  @@ ", "@@@@  ", "@  @@ ", "@   @@"};
+                case 'L': return new String[]{"@     ", "@     ", "@     ", "@     ", "@@@@@@"};
+                case 'M': return new String[]{"@    @", "@@  @@", "@ @@ @", "@    @", "@    @"};
+                case 'N': return new String[]{"@    @", "@@   @", "@ @  @", "@  @ @", "@    @"};
+                case 'O': return new String[]{" @@@@ ", "@    @", "@    @", "@    @", " @@@@ "};
+                case 'P': return new String[]{"@@@@@ ", "@    @", "@@@@@ ", "@     ", "@     "};
+                case 'R': return new String[]{"@@@@@ ", "@    @", "@@@@@ ", "@  @@ ", "@   @@"};
+                case 'S': return new String[]{" @@@@@", "@     ", " @@@@ ", "     @", "@@@@@ "};
+                case 'T': return new String[]{"@@@@@@", "  @@  ", "  @@  ", "  @@  ", "  @@  "};
+                case 'U': return new String[]{"@    @", "@    @", "@    @", "@    @", " @@@@ "};
+                case 'V': return new String[]{"@    @", "@    @", "@    @", " @@@@ ", "  @@  "};
+                case 'W': return new String[]{"@    @", "@    @", "@ @@ @", "@@  @@", "@    @"};
+                case 'Y': return new String[]{"@    @", " @  @ ", "  @@  ", "  @@  ", "  @@  "};
+                default:  return new String[]{"      ", "      ", "      ", "      ", "      "};
+            }
+        } else {
+            switch (c) {
+                case 'A': return new String[]{"@@@ ","@  @","@@@@","@  @","@  @"};
+                case 'B': return new String[]{"@@@ ","@  @","@@@ ","@  @","@@@ "};
+                case 'C': return new String[]{" @@@","@   ","@   ","@   "," @@@"};
+                case 'D': return new String[]{"@@@ ","@  @","@  @","@  @","@@@ "};
+                case 'E': return new String[]{"@@@@","@   ","@@@ ","@   ","@@@@"};
+                case 'F': return new String[]{"@@@@","@   ","@@@ ","@   ","@   "};
+                case 'G': return new String[]{" @@@","@   ","@ @@","@  @"," @@@"};
+                case 'H': return new String[]{"@  @","@  @","@@@@","@  @","@  @"};
+                case 'I': return new String[]{"@@@@"," @@ "," @@ "," @@ ","@@@@"};
+                case 'J': return new String[]{"  @@","  @@","  @@","@ @@"," @@ "};
+                case 'K': return new String[]{"@  @","@ @@","@@  ","@ @@","@  @"};
+                case 'L': return new String[]{"@   ","@   ","@   ","@   ","@@@@"};
+                case 'M': return new String[]{"@@@@","@  @","@  @","@  @","@  @"};
+                case 'N': return new String[]{"@  @","@@ @","@ @@","@  @","@  @"};
+                case 'O': return new String[]{" @@ ","@  @","@  @","@  @"," @@ "};
+                case 'P': return new String[]{"@@@ ","@  @","@@@ ","@   ","@   "};
+                case 'R': return new String[]{"@@@ ","@  @","@@@ ","@  @","@  @"};
+                case 'S': return new String[]{" @@@","@   "," @@ ","   @","@@@ "};
+                case 'T': return new String[]{"@@@@"," @@ "," @@ "," @@ "," @@ "};
+                case 'U': return new String[]{"@  @","@  @","@  @","@  @"," @@ "};
+                case 'V': return new String[]{"@  @","@  @","@  @"," @@ "," @@ "};
+                case 'W': return new String[]{"@  @","@  @","@  @","@@@@","@  @"};
+                case 'Y': return new String[]{"@  @"," @  "," @@ "," @@ "," @@ "};
+                default:  return new String[]{"    ","    ","    ","    ","    "};
+            }
+        }
     }
 
-    /**
-     * Format a duration in milliseconds as a human-readable "last seen" string.
-     * Examples: "just now", "5 min ago", "2 h ago", "3 d ago"
-     */
-    public static String formatLastSeen(long agoMs) {
-        if (agoMs < 0) agoMs = 0;
-        long secs = agoMs / 1000L;
-        if (secs < 60)  return "just now";
-        long mins  = secs / 60L;
-        if (mins < 60)  return mins + " min ago";
-        long hours = mins / 60L;
-        if (hours < 48) return hours + " h ago";
-        long days  = hours / 24L;
-        return days + " d ago";
+    private static String[] getDayAsciiArt(int dayOfWeek) {
+        switch (dayOfWeek) {
+            case Calendar.MONDAY:
+                return new String[] {
+                    "          _|_          ",
+                    "       --/ _ \\--       ",
+                    "     .---+---+---.     ",
+                    "    /  T_T   T_T  \\    ",
+                    "   |               |   ",
+                    "    \\    _____    /    ",
+                    "     '._       _.'     ",
+                    "        '._ _.'        ",
+                    "      ( NEED COFFEE )  "
+                };
+            case Calendar.TUESDAY:
+                return new String[] {
+                    "         _/\\_/\\_       ",
+                    "        ( o   o )      ",
+                    "        /   _   \\      ",
+                    "       (   \\_/   )     ",
+                    "        \\_______/      ",
+                    "         /     \\       ",
+                    "        /_______\\      ",
+                    "       /    |    \\     ",
+                    "    ( SCANNING INTENSELY )"
+                };
+            case Calendar.WEDNESDAY:
+                return new String[] {
+                    "          _     _      ",
+                    "         / \\_ _/ \\     ",
+                    "        (  o   o  )    ",
+                    "         \\   _   /     ",
+                    "          \\_/ \\_/      ",
+                    "         _|_   _|_     ",
+                    "        (___) (___)    ",
+                    "                       ",
+                    "     ( HAPPY HUMP DAY! )"
+                };
+            case Calendar.THURSDAY:
+                return new String[] {
+                    "         .-''''-.      ",
+                    "       .'  _  _  '.    ",
+                    "      /   (O)(O)   \\   ",
+                    "      |     __     |   ",
+                    "      \\    \\__/    /   ",
+                    "       '.        .'    ",
+                    "         '-....-'      ",
+                    "          /    \\       ",
+                    "    ( WEEKEND IN SIGHT! )"
+                };
+            case Calendar.FRIDAY:
+                return new String[] {
+                    "           /\\          ",
+                    "          /  \\         ",
+                    "         /____\\        ",
+                    "        (  @   @ )     ",
+                    "         \\   o  /      ",
+                    "          \\____/       ",
+                    "         _/__|__\\_     ",
+                    "        /         \\    ",
+                    "    ( TGIF: PARTY MODE )"
+                };
+            case Calendar.SATURDAY:
+                return new String[] {
+                    "         .-------.     ",
+                    "       .'  _   _  '.   ",
+                    "      /   (X) (X)   \\  ",
+                    "      |      _      |  ",
+                    "      \\     (_)     /  ",
+                    "       '.         .'   ",
+                    "         '-.....-'     ",
+                    "        / /     \\ \\    ",
+                    "    ( SHHH! SLEEPING... )"
+                };
+            case Calendar.SUNDAY:
+            default:
+                return new String[] {
+                    "       _.-'''''''-._   ",
+                    "     .'   __   __   '. ",
+                    "    /    (O)   (O)    \\",
+                    "    |                 |",
+                    "    \\      \\___/      /",
+                    "     '.             .' ",
+                    "       '.________._'   ",
+                    "          \\_____/      ",
+                    "     ( RELAXING RADAR )"
+                };
+        }
     }
 
-    /** Map weather description to a compact weather icon. */
-    public static String weatherIcon(String desc) {
-        if (desc == null || desc.equals("--")) return "[?]";
+    private static String pad(String s) {
+        if (s == null) s = "";
+        if (s.length() >= KindleUtils.COLS) return s.substring(0, KindleUtils.COLS);
+        StringBuilder sb = new StringBuilder(s);
+        while (sb.length() < KindleUtils.COLS) sb.append(' ');
+        return sb.toString();
+    }
+
+    private static String center(String s) {
+        if (s == null) s = "";
+        if (s.length() > KindleUtils.COLS) {
+            return s.substring(0, KindleUtils.COLS);
+        }
+        int totalSpaces = KindleUtils.COLS - s.length();
+        int left = totalSpaces / 2;
+        int right = totalSpaces - left;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < left; i++) sb.append(' ');
+        sb.append(s);
+        for (int i = 0; i < right; i++) sb.append(' ');
+        return sb.toString();
+    }
+
+    private static String weatherIcon(String desc) {
+        if (desc == null) return "[?]";
         String d = desc.toLowerCase();
         if (d.contains("thunder") || d.contains("storm"))      return "[!]";
-        if (d.contains("blizzard"))                             return "[#]";
-        if (d.contains("sleet") || d.contains("snow"))         return "[*]";
-        if (d.contains("drizzle") || d.contains("rain"))       return "[~]";
+        if (d.contains("rain") || d.contains("drizzle"))       return "///";
+        if (d.contains("snow") || d.contains("sleet"))         return "* *";
         if (d.contains("shower"))                               return "[:]";
         if (d.contains("fog") || d.contains("mist"))           return "[=]";
         if (d.contains("overcast") || d.contains("cloud"))     return "[o]";
