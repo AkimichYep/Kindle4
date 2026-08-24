@@ -134,7 +134,7 @@ final class DashboardView {
             "</style></head><body><div class='wrap'>" +
 
             "<h1>Kindle Drone<span class='dot'></span></h1>" +
-            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/logs'>Logs</a></div>" +
+            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/books'>Books</a><a href='/logs'>Logs</a></div>" +
 
             // ── Battery card ──────────────────────────────────────────────────
             "<div class='batt-card' id='bcard'>" +

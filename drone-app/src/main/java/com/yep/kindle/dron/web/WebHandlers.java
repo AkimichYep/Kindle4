@@ -9,8 +9,10 @@ import com.yep.kindle.dron.util.SensorReader;
 
 import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
+import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -602,6 +604,236 @@ final class WebHandlers {
                 HttpUtils.send(ex, 500, "application/json",
                     String.format("{\"ok\":false,\"error\":\"%s\"}",
                         HttpUtils.escapeJson(e.getMessage() != null ? e.getMessage() : "unknown")));
+            }
+        }
+    }
+
+    static final class BooksPageHandler implements HttpHandler {
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            ex.getResponseHeaders().set("Content-Type", "text/html; charset=UTF-8");
+            ex.getResponseHeaders().set("Cache-Control", "no-store, no-cache, must-revalidate");
+            ex.getResponseHeaders().set("Pragma", "no-cache");
+            ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
+            HttpUtils.writeResponse(ex, 200, BooksView.BYTES);
+        }
+    }
+
+    static final class ListBooksHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        ListBooksHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            AppDataManager dm = deviceState.getDataManager();
+            if (dm == null) {
+                HttpUtils.send(ex, 503, "application/json", "{\"error\":\"DataManager not initialized\"}");
+                return;
+            }
+
+            File booksDir = dm.getBooksDir();
+            List<AppDataManager.BookItem> books = dm.listBooks();
+            long totalMobiSize = 0;
+
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < books.size(); i++) {
+                AppDataManager.BookItem b = books.get(i);
+                totalMobiSize += b.size;
+                String dateStr = new java.text.SimpleDateFormat("yyyy-MM-dd HH:mm")
+                    .format(new java.util.Date(b.lastModified));
+
+                if (i > 0) sb.append(",");
+                sb.append("{")
+                  .append("\"name\":\"").append(HttpUtils.escapeJson(b.name)).append("\",")
+                  .append("\"size\":").append(b.size).append(",")
+                  .append("\"sizeFormatted\":\"").append(HttpUtils.escapeJson(formatSize(b.size))).append("\",")
+                  .append("\"lastModified\":").append(b.lastModified).append(",")
+                  .append("\"date\":\"").append(dateStr).append("\"")
+                  .append("}");
+            }
+            sb.append("]");
+
+            long freeSpace = booksDir.getFreeSpace();
+            long totalSpace = booksDir.getTotalSpace();
+
+            String json = String.format(
+                "{\"books\":%s,\"count\":%d,\"totalMobiSize\":%d,\"totalMobiSizeFormatted\":\"%s\"," +
+                "\"freeSpace\":%d,\"freeSpaceFormatted\":\"%s\"," +
+                "\"totalSpace\":%d,\"totalSpaceFormatted\":\"%s\"}",
+                sb.toString(), books.size(), totalMobiSize, HttpUtils.escapeJson(formatSize(totalMobiSize)),
+                freeSpace, HttpUtils.escapeJson(formatSize(freeSpace)),
+                totalSpace, HttpUtils.escapeJson(formatSize(totalSpace))
+            );
+
+            HttpUtils.send(ex, 200, "application/json", json);
+        }
+
+        private static String formatSize(long bytes) {
+            if (bytes < 1024) return bytes + " B";
+            if (bytes < 1024 * 1024) return String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0);
+            if (bytes < 1024 * 1024 * 1024) return String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0));
+            return String.format(java.util.Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+        }
+    }
+
+    static final class DeleteBooksHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        DeleteBooksHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            AppDataManager dm = deviceState.getDataManager();
+            if (dm == null) {
+                HttpUtils.send(ex, 503, "application/json", "{\"ok\":false,\"error\":\"DataManager not ready\"}");
+                return;
+            }
+
+            byte[] bodyBytes = HttpUtils.readBody(ex);
+            String body = new String(bodyBytes, StandardCharsets.UTF_8).trim();
+
+            List<String> names = new ArrayList<>();
+            if (body.startsWith("[")) {
+                String content = body.substring(1, body.length() - (body.endsWith("]") ? 1 : 0));
+                for (String item : content.split(",")) {
+                    String s = item.trim().replaceAll("^\"|\"$", "");
+                    if (!s.isEmpty()) names.add(s);
+                }
+            } else if (!body.isEmpty()) {
+                names.add(body);
+            }
+
+            int deletedCount = 0;
+            List<String> failed = new ArrayList<>();
+            for (String name : names) {
+                if (dm.deleteBook(name)) {
+                    deletedCount++;
+                } else {
+                    failed.add(name);
+                }
+            }
+
+            String json = String.format(
+                "{\"ok\":true,\"deletedCount\":%d,\"failedCount\":%d}",
+                deletedCount, failed.size());
+            HttpUtils.send(ex, 200, "application/json", json);
+        }
+    }
+
+    static final class UploadBookHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        UploadBookHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "POST")) return;
+            AppDataManager dm = deviceState.getDataManager();
+            if (dm == null) {
+                HttpUtils.send(ex, 503, "application/json", "{\"ok\":false,\"error\":\"DataManager not ready\"}");
+                return;
+            }
+
+            String filename = null;
+            String query = ex.getRequestURI().getQuery();
+            if (query != null && query.contains("name=")) {
+                for (String p : query.split("&")) {
+                    if (p.startsWith("name=")) {
+                        filename = HttpUtils.urlDecode(p.substring(5));
+                        break;
+                    }
+                }
+            }
+
+            if (filename == null || filename.trim().isEmpty()) {
+                filename = ex.getRequestHeaders().getFirst("X-Filename");
+                if (filename != null) {
+                    if (filename.contains("%")) {
+                        try { filename = java.net.URLDecoder.decode(filename, "UTF-8"); } catch (Exception ignored) {}
+                    } else {
+                        try {
+                            byte[] b = filename.getBytes(StandardCharsets.ISO_8859_1);
+                            String dec = new String(b, StandardCharsets.UTF_8);
+                            if (!dec.contains("\uFFFD")) filename = dec;
+                        } catch (Exception ignored) {}
+                    }
+                }
+            }
+
+            if (filename == null || filename.trim().isEmpty()) {
+                filename = "uploaded_book_" + System.currentTimeMillis() + ".mobi";
+            }
+
+            filename = new File(filename).getName();
+            String fnLower = filename.toLowerCase();
+            boolean hasKnownExt = fnLower.endsWith(".mobi") || fnLower.endsWith(".azw") || fnLower.endsWith(".azw3")
+                               || fnLower.endsWith(".pdf") || fnLower.endsWith(".epub") || fnLower.endsWith(".txt");
+            if (!hasKnownExt) {
+                filename = filename + ".mobi";
+            }
+
+            File targetFile = new File(dm.getBooksDir(), filename);
+
+            long totalBytes = 0;
+            try (InputStream is = ex.getRequestBody();
+                 OutputStream fos = new FileOutputStream(targetFile)) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) != -1) {
+                    fos.write(buf, 0, n);
+                    totalBytes += n;
+                }
+            } catch (IOException e) {
+                if (targetFile.exists()) targetFile.delete();
+                HttpUtils.send(ex, 500, "application/json",
+                    String.format("{\"ok\":false,\"error\":\"Save failed: %s\"}", HttpUtils.escapeJson(e.getMessage())));
+                return;
+            }
+
+            HttpUtils.send(ex, 200, "application/json",
+                String.format("{\"ok\":true,\"name\":\"%s\",\"size\":%d}",
+                    HttpUtils.escapeJson(filename), totalBytes));
+        }
+    }
+
+    static final class DownloadBookHandler implements HttpHandler {
+        private final DeviceState deviceState;
+        DownloadBookHandler(DeviceState deviceState) { this.deviceState = deviceState; }
+
+        public void handle(HttpExchange ex) throws IOException {
+            if (!HttpUtils.requireMethod(ex, "GET")) return;
+            AppDataManager dm = deviceState.getDataManager();
+            if (dm == null) {
+                HttpUtils.send(ex, 503, "text/plain", "DataManager not ready");
+                return;
+            }
+
+            String query = ex.getRequestURI().getQuery();
+            String name = null;
+            if (query != null) {
+                for (String p : query.split("&")) {
+                    if (p.startsWith("name=")) {
+                        name = HttpUtils.urlDecode(p.substring(5));
+                        break;
+                    }
+                }
+            }
+
+            AppDataManager.BookItem book = dm.getBookItem(name);
+            if (book == null || book.path == null || !java.nio.file.Files.exists(book.path)) {
+                HttpUtils.send(ex, 404, "text/plain", "Book not found");
+                return;
+            }
+
+            ex.getResponseHeaders().set("Content-Type", HttpUtils.mimeForFilename(book.name));
+            ex.getResponseHeaders().set("Content-Disposition", "attachment; filename=\"" + HttpUtils.escapeHtml(book.name) + "\"");
+            ex.getResponseHeaders().set("Content-Length", String.valueOf(book.size));
+
+            ex.sendResponseHeaders(200, book.size);
+            try (InputStream is = java.nio.file.Files.newInputStream(book.path);
+                 OutputStream os = ex.getResponseBody()) {
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = is.read(buf)) != -1) {
+                    os.write(buf, 0, n);
+                }
             }
         }
     }

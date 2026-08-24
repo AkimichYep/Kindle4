@@ -167,6 +167,8 @@ public class KindleDroneDetectorPro {
     // =========================================================================
 
     public static void main(String[] args) {
+        System.setProperty("file.encoding", "UTF-8");
+        System.setProperty("sun.jnu.encoding", "UTF-8");
         System.setProperty("java.awt.headless", "true");
         AppLog.info("=== KindleDroneDetectorPro v2.5-event ===");
 

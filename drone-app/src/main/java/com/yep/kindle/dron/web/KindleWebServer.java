@@ -56,7 +56,12 @@ public class KindleWebServer {
         HttpServer s = HttpServer.create(new InetSocketAddress("0.0.0.0", PORT), 16);
         s.createContext("/",              new WebHandlers.RootHandler());
         s.createContext("/gallery",       new WebHandlers.GalleryHandler(deviceState));
+        s.createContext("/books",         new WebHandlers.BooksPageHandler());
         s.createContext("/logs",          new WebHandlers.LogsHandler());
+        s.createContext("/api/books",          new WebHandlers.ListBooksHandler(deviceState));
+        s.createContext("/api/books/delete",   new WebHandlers.DeleteBooksHandler(deviceState));
+        s.createContext("/api/books/upload",   new WebHandlers.UploadBookHandler(deviceState));
+        s.createContext("/api/books/download", new WebHandlers.DownloadBookHandler(deviceState));
         s.createContext("/api/status",    new WebHandlers.StatusHandler(deviceState));
         s.createContext("/api/message",   new WebHandlers.MessageHandler(deviceState));
         s.createContext("/api/next-page", new WebHandlers.NextPageHandler(deviceState));

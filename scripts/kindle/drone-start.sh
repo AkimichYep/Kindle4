@@ -77,12 +77,15 @@ else
   fi
 fi
 
+export LC_ALL="${LC_ALL:-en_US.UTF-8}"
+export LANG="${LANG:-en_US.UTF-8}"
+
 rdate -s time.nist.gov >> "$LOG_FILE" 2>&1 || true
 if command -v hwclock >/dev/null 2>&1; then
   hwclock -w >> "$LOG_FILE" 2>&1 || true
 fi
 mkdir -p "$APP_DIR/logs" 2>/dev/null || true
-cd "$APP_DIR" && "$JAVA_BIN" -Duser.timezone=Europe/Kiev -jar "$APP_JAR" </dev/null >> "$LOG_FILE" 2>&1 &
+cd "$APP_DIR" && "$JAVA_BIN" -Dfile.encoding=UTF-8 -Dsun.jnu.encoding=UTF-8 -Duser.timezone=Europe/Kiev -jar "$APP_JAR" </dev/null >> "$LOG_FILE" 2>&1 &
 NEW_PID=$!
 sleep 1
 

@@ -43,7 +43,7 @@ final class GalleryView {
             ".item .name{padding:8px;font-size:11px;color:#64748b;text-align:center;word-break:break-all}" +
             "</style></head><body><div class='wrap'>" +
             "<h1>Image Gallery</h1>" +
-            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/logs'>Logs</a></div>" +
+            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/books'>Books</a><a href='/logs'>Logs</a></div>" +
             "<div class='gallery'>" + items + "</div>" +
             "</div></body></html>";
     }
