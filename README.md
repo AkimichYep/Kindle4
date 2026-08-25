@@ -111,11 +111,17 @@ CRC+52 NF:-96 SNR:33 LQ:42 ARMED
 ```
 
 ### Display Modes (auto-rotating every 5 minutes)
-1. **Main HUD** — Top 30 APs by threat score
-2. **Weather page** — Current conditions + radar image
-3. **Moon/Space page** — Placeholder pages
-4. **Home temp** — Room temperature history (if papyrus sensor available)
-5. **Radar** — Graphical AP position map (50 sec animation)
+1. **Main HUD** — Top 30 APs by threat score (`weather`)
+2. **Moon Information** — Lunar phase and calendar (`moon`)
+3. **Space Weather** — Solar & geomagnetic activity (`space`)
+4. **Home Temperature** — Room temperature history (`hometemp`)
+5. **Date & Time Transition** — Big-font local time (HH:MM), day of week, and daily funny quote (`time`)
+6. **Radar** — Graphical AP position map (`radar`, 30-second hold)
+
+> **Note on Date & Time Display (`time` view):**
+> Rendered using low-power, text-only native Kindle `eips` commands (no Java AWT, no PNG rendering, zero flash wear).
+> - **Animated Reveal:** Renders row-by-row top-to-bottom with a 60 ms per-row delay for a retro CRT scanline reveal (~2.4s total animation), then holds static for the remaining duration.
+> - **System Time Sync:** Automatically syncs Java's timezone at startup against the Linux system time (`date +%H` vs UTC) to guarantee accurate DST-aware local time display (e.g. `16:27 EEST`).
 
 ### Symbols
 | Symbol | Meaning |
@@ -130,7 +136,7 @@ CRC+52 NF:-96 SNR:33 LQ:42 ARMED
 | `** EXT RF **` | Idle CRC detected external RF |
 
 <details>
-<summary><strong>📸 Display Screenshots (8 pages)</strong></summary>
+<summary><strong>📸 Display Screenshots (9 pages)</strong></summary>
 
 ### Display Screenshots
 
@@ -148,6 +154,9 @@ CRC+52 NF:-96 SNR:33 LQ:42 ARMED
 
 #### Home Temperature History
 ![Kindle Temperature Page](docs/images/kindle4-05-home-temperature-page.JPEG)
+
+#### Date & Time Transition View
+![Kindle Date & Time Page](Date-Time-View.png)
 
 #### Radar Visualization
 ![Radar Rendered Image](docs/images/kindle4-06-1-radar-rendered.png)
