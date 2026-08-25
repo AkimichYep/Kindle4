@@ -17,6 +17,9 @@ final class HttpUtils {
 
     static void send(HttpExchange ex, int code, String ct, String body) throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
+        if ((ct.startsWith("application/json") || ct.startsWith("text/")) && !ct.contains("charset")) {
+            ct = ct + "; charset=UTF-8";
+        }
         ex.getResponseHeaders().set("Content-Type", ct);
         ex.getResponseHeaders().set("Cache-Control", "no-cache");
         ex.getResponseHeaders().set("Access-Control-Allow-Origin", "*");
@@ -68,8 +71,26 @@ final class HttpUtils {
 
     static String escapeJson(String s) {
         if (s == null) return "";
-        return s.replace("\\", "\\\\").replace("\"", "\\\"")
-                .replace("\n", "\\n").replace("\r", "\\r");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            switch (c) {
+                case '"':  sb.append("\\\""); break;
+                case '\\': sb.append("\\\\"); break;
+                case '\b': sb.append("\\b"); break;
+                case '\f': sb.append("\\f"); break;
+                case '\n': sb.append("\\n"); break;
+                case '\r': sb.append("\\r"); break;
+                case '\t': sb.append("\\t"); break;
+                default:
+                    if (c < 32) {
+                        sb.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        sb.append(c);
+                    }
+            }
+        }
+        return sb.toString();
     }
 
     static String escapeHtml(String s) {
@@ -88,6 +109,8 @@ final class HttpUtils {
         if (n.endsWith(".png"))  return "image/png";
         if (n.endsWith(".jpg") || n.endsWith(".jpeg")) return "image/jpeg";
         if (n.endsWith(".gif")) return "image/gif";
+        if (n.endsWith(".mobi") || n.endsWith(".azw") || n.endsWith(".azw3")) return "application/x-mobipocket-ebook";
+        if (n.endsWith(".pdf")) return "application/pdf";
         return "application/octet-stream";
     }
 }

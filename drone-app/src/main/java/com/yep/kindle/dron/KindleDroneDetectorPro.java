@@ -86,37 +86,36 @@ public class KindleDroneDetectorPro {
     static final int  SAVE_EVERY        = 36;
 
     // ── Display page timing ───────────────────────────────────────────────────
-    /**
-     * How long each info page stays on screen (ms).
-     * Sequence: Weather → Moon → Space → Radar, then repeat.
-     */
-    static final long PAGE_HOLD_MS      = 300_000L;  // 5 min per page
-    /** How long the radar image stays visible (ms). */
+    /** How long normal info pages stay on screen (ms). */
+    static final long PAGE_HOLD_MS      = 300_000L;  // 5 min per normal info page
+    /** How long short-stay pages (radar, datetime) stay visible (ms). */
     static final long RADAR_HOLD_MS     = 30_000L;   // 30 s
-    /** How long the time/day transition screen stays visible (ms). */
-    static final long TIME_HOLD_MS      = 10_000L;   // 10 s
+    static final long DATETIME_HOLD_MS  = 30_000L;   // 30 s
     static final long MESSAGE_HOLD_MS   = 20_000L;   // 20 s temporary message overlay
+    static final boolean TRANSITION_OVERLAY_ENABLED = true;
+    static final long TRANSITION_OVERLAY_LINE_DELAY_MS = 18L;
+    static final long TRANSITION_OVERLAY_HOLD_MS = 900L;
     /** Re-render an info page PNG only if it is older than this (ms). */
     static final long INFO_REGEN_MS     = 10 * 60_000L; // 10 min
 
     // Display page indices
     static final int PAGE_WEATHER  = 0;
-    static final int PAGE_MOON     = 1;
-    static final int PAGE_SPACE    = 2;
-    static final int PAGE_TEMP     = 3;
-    static final int PAGE_TIME     = 4;
+    static final int PAGE_SPACE    = 1;
+    static final int PAGE_TEMP     = 2;
+    static final int PAGE_DATETIME = 3;
+    static final int PAGE_MOON     = 4;
     static final int PAGE_RADAR    = 5;
     static final int PAGE_COUNT    = 6;
 
     static final String[] PAGE_FILES = {
         "/mnt/us/drone-app/img/weather.png",
-        "/mnt/us/drone-app/img/moon.png",
         "/mnt/us/drone-app/img/spaceweather.png",
         "/mnt/us/drone-app/img/hometemp.png",
-        "",                                // Time transition page (text-only eips)
+        "/mnt/us/drone-app/img/datetime.png",
+        "/mnt/us/drone-app/img/moon.png",
         RadarRenderer.IMAGE_FILE          // /mnt/us/drone-app/img/radar.png
     };
-    static final String[] PAGE_NAMES = { "weather", "moon", "space", "hometemp", "time", "radar" };
+    static final String[] PAGE_NAMES = { "weather", "space", "hometemp", "datetime", "moon", "radar" };
 
     // ── Misc thresholds ───────────────────────────────────────────────────────
     static final int  IDLE_CRC_THRESHOLD = 6;
@@ -171,6 +170,8 @@ public class KindleDroneDetectorPro {
     // =========================================================================
 
     public static void main(String[] args) {
+        System.setProperty("file.encoding", "UTF-8");
+        System.setProperty("sun.jnu.encoding", "UTF-8");
         System.setProperty("java.awt.headless", "true");
         KindleUtils.syncSystemTimeZone();
         AppLog.info("=== KindleDroneDetectorPro v2.5-event ===");
@@ -294,9 +295,6 @@ public class KindleDroneDetectorPro {
         // without blocking the main thread.
         boolean radarHoldActive     = false;
         long    radarHoldUntil      = 0;
-        boolean transitionHoldActive = false;
-        long    transitionHoldUntil  = 0;
-        int     transitionNextPage   = 0;
 
         // =========================================================================
         // Event-driven main loop
@@ -540,8 +538,9 @@ public class KindleDroneDetectorPro {
 
             // ── Page auto-advance timer (checked on every wakeup) ─────────────
             long now = System.currentTimeMillis();
-            if (!overlayVisible && !radarHoldActive && !transitionHoldActive && webState.isRotationEnabled()
-                    && now - pageShownAt >= PAGE_HOLD_MS) {
+            long currentHold = (currentPage == PAGE_DATETIME) ? DATETIME_HOLD_MS : PAGE_HOLD_MS;
+            if (!overlayVisible && !radarHoldActive && webState.isRotationEnabled()
+                    && now - pageShownAt >= currentHold) {
                 currentPage = (currentPage + 1) % PAGE_COUNT;
                 pageShownAt = now;
                 generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
@@ -552,21 +551,7 @@ public class KindleDroneDetectorPro {
                     // Start non-blocking 30-second hold instead of Thread.sleep
                     radarHoldActive = true;
                     radarHoldUntil  = System.currentTimeMillis() + RADAR_HOLD_MS;
-                } else if (currentPage == PAGE_TIME) {
-                    // Start non-blocking 10-second hold for time transition page
-                    transitionHoldActive = true;
-                    transitionHoldUntil  = System.currentTimeMillis() + TIME_HOLD_MS;
                 }
-            }
-
-            // ── Time transition hold: non-blocking 10-second wait ────────────────
-            if (transitionHoldActive && now >= transitionHoldUntil) {
-                transitionHoldActive = false;
-                currentPage = (currentPage + 1) % PAGE_COUNT;
-                pageShownAt = now;
-                generateAndShowPage(currentPage, ctx, display, firstRun, radarMgr);
-                AppLog.info("PAGE->" + PAGE_NAMES[currentPage] + " (post-time-transition)");
-                webState.setCurrentPage(PAGE_NAMES[currentPage]);
             }
 
             // ── Overlay auto-dismiss (fallback for expiry without OVERLAY_CLEAR) ─
@@ -591,14 +576,18 @@ public class KindleDroneDetectorPro {
      */
     static void generateAndShowPage(int page, DetectorContext ctx, DisplayManager display,
                                      boolean firstRun, RadarImageManager radarMgr) {
+        if (TRANSITION_OVERLAY_ENABLED && page != PAGE_RADAR) {
+            display.showTimeOverlay(ctx, TRANSITION_OVERLAY_LINE_DELAY_MS, TRANSITION_OVERLAY_HOLD_MS);
+        }
+
         switch (page) {
             case PAGE_WEATHER:
-            case PAGE_MOON:
             case PAGE_SPACE:
-                // These pages fetch external data — only regenerate when the cached PNG is stale.
+            case PAGE_MOON:
+                // These pages fetch external data — only regenerate when the cached PNG is stale or negative age (time sync).
                 java.io.File f = new java.io.File(PAGE_FILES[page]);
                 long ageMs = f.exists() ? System.currentTimeMillis() - f.lastModified() : Long.MAX_VALUE;
-                if (ageMs > INFO_REGEN_MS) {
+                if (!f.exists() || ageMs > INFO_REGEN_MS || ageMs < 0) {
                     generateInfoImage(page, ctx);
                 } else {
                     AppLog.info("PAGE-CACHED p=" + page + " age=" + (ageMs / 1000) + "s");
@@ -607,15 +596,10 @@ public class KindleDroneDetectorPro {
                 break;
 
             case PAGE_TEMP:
-                // Home Temperature reads a local sensor — always regenerate so the display
-                // shows the current reading, not a cached morning value.
-                generateInfoImage(PAGE_TEMP, ctx);
-                showPngOrFallback(PAGE_FILES[PAGE_TEMP], ctx, display);
-                break;
-
-            case PAGE_TIME:
-                // Text-only eips screen with ASCII art and time/day of week
-                display.showTimePage(ctx);
+            case PAGE_DATETIME:
+                // Home Temperature and Date & Time live views — always regenerate
+                generateInfoImage(page, ctx);
+                showPngOrFallback(PAGE_FILES[page], ctx, display);
                 break;
 
             case PAGE_RADAR:
@@ -739,14 +723,17 @@ public class KindleDroneDetectorPro {
                 case PAGE_WEATHER:
                     KindleWeatherNoKey.generateAndSave(PAGE_FILES[PAGE_WEATHER]);
                     break;
-                case PAGE_MOON:
-                    KindleMoonCalendarNoKey.generateAndSave(PAGE_FILES[PAGE_MOON]);
-                    break;
                 case PAGE_SPACE:
                     KindleSpaceWeatherNoKey.generateAndSave(PAGE_FILES[PAGE_SPACE]);
                     break;
                 case PAGE_TEMP:
                     KindleHomeTemp.generateAndSave(PAGE_FILES[PAGE_TEMP]);
+                    break;
+                case PAGE_DATETIME:
+                    KindleDateTime.generateAndSave(PAGE_FILES[PAGE_DATETIME]);
+                    break;
+                case PAGE_MOON:
+                    KindleMoonCalendarNoKey.generateAndSave(PAGE_FILES[PAGE_MOON]);
                     break;
                 default:
                     break;
@@ -760,7 +747,8 @@ public class KindleDroneDetectorPro {
     static void showPngOrFallback(String file, DetectorContext ctx, DisplayManager display) {
         java.io.File f = new java.io.File(file);
         if (f.exists()) {
-            display.clearForPageSwitch("show-png");
+            KindleUtils.exec("eips", "-c");
+            KindleUtils.sleep(200);
             KindleUtils.exec("eips", "-g", file);
             KindleUtils.sleep(500);
         } else {

@@ -186,11 +186,13 @@ public final class ScreenBuilder {
     // =========================================================================
 
     public static String[] buildTimeScreen(DetectorContext ctx) {
+        KindleUtils.syncSystemTimeZone();
         Calendar cal = Calendar.getInstance();
         return buildTimeScreenForCalendar(ctx, cal);
     }
 
     public static String[] buildTimeScreenForDay(DetectorContext ctx, int dayOfWeek) {
+        KindleUtils.syncSystemTimeZone();
         Calendar cal = Calendar.getInstance();
         cal.set(Calendar.DAY_OF_WEEK, dayOfWeek);
         return buildTimeScreenForCalendar(ctx, cal);

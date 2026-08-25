@@ -3,6 +3,7 @@ package com.yep.kindle.dron;
 import com.yep.kindle.dron.display.KindleCanvas;
 import com.yep.kindle.dron.display.KindleLayoutKit;
 import com.yep.kindle.dron.util.AppLog;
+import com.yep.kindle.dron.util.KindleUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.BasicStroke;
@@ -68,6 +69,7 @@ public class KindleHomeTemp {
     // ── Standalone preview (dev machine) ─────────────────────────────────────
 
     public static void main(String[] args) throws Exception {
+        KindleUtils.syncSystemTimeZone();
         LocalDate today = LocalDate.now(ZoneId.systemDefault());
         // Each entry: avg temp. 0 = missing day. Spread of ±3 °C added for min/max.
         int[] fakeAvgs = {
@@ -93,6 +95,7 @@ public class KindleHomeTemp {
     // ── Public entry point ────────────────────────────────────────────────────
 
     public static void generateAndSave(String outputPath) throws Exception {
+        KindleUtils.syncSystemTimeZone();
         if (!dataLoaded) {
             loadCsv();
             dataLoaded = true;

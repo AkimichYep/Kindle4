@@ -21,10 +21,11 @@ public final class WeatherService {
     public static WeatherData fetchWeather(String location) {
         WeatherData wd = new WeatherData();
         wd.updatedAt = System.currentTimeMillis();
+        HttpURLConnection conn = null;
         try {
             String urlLocation = location.replace(" ", "%20");
             URL url = new URL("http://wttr.in/" + urlLocation + "?format=j1");
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn = (HttpURLConnection) url.openConnection();
             conn.setConnectTimeout(12_000);
             conn.setReadTimeout(12_000);
             conn.setRequestProperty("User-Agent", "curl/7.0");
@@ -48,6 +49,8 @@ public final class WeatherService {
             wd.error       = null;
         } catch (Exception e) {
             wd.error = e.getClass().getSimpleName() + ":" + e.getMessage();
+        } finally {
+            if (conn != null) conn.disconnect();
         }
         return wd;
     }

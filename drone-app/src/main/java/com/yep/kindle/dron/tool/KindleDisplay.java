@@ -6,18 +6,25 @@ import java.net.InetSocketAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 
 public class KindleDisplay {
     private static final int PORT = 5555;
+    private static volatile boolean running = true;
 
     public static void main(String[] args) {
-        System.out.println("=== Kindle E-Ink Wi-Fi HUD Active ===");
-        try {
-            ServerSocket serverSocket = new ServerSocket();
+        AppLog.init(System.getProperty("kindle.log.file", "kindle-display.log"), 256 * 1024L);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            running = false;
+            AppLog.info("Shutdown requested for KindleDisplay");
+        }, "shutdown-kindle-display"));
+        AppLog.info("=== Kindle E-Ink Wi-Fi HUD Active ===");
+        try (ServerSocket serverSocket = new ServerSocket()) {
             serverSocket.bind(new InetSocketAddress("0.0.0.0", PORT));
+            serverSocket.setSoTimeout(1_000);
 
-            while (true) {
+            while (running) {
                 try (Socket clientSocket = serverSocket.accept();
                      BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()))) {
 
@@ -28,15 +35,16 @@ public class KindleDisplay {
                     }
 
                     if (payload.length() > 0) {
-                        System.out.println("[E-INK UPDATE]:\n" + payload.toString());
+                        AppLog.info("[E-INK UPDATE]:\n" + payload.toString());
                         KindleUtils.renderToEInk(payload.toString());
                     }
                 } catch (Exception e) {
-                    System.err.println("Display read error: " + e.getMessage());
+                    if (e instanceof java.net.SocketTimeoutException) continue;
+                    AppLog.exception("Display read error", e);
                 }
             }
         } catch (Exception e) {
-            System.err.println("Server exception: " + e.getMessage());
+            AppLog.exception("Display server exception", e);
         }
     }
 

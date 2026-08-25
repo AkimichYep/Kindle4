@@ -1,13 +1,12 @@
 package com.yep.kindle.dron.tool;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 import com.yep.kindle.dron.util.WifiUtils;
 
@@ -39,6 +38,8 @@ import com.yep.kindle.dron.util.WifiUtils;
  * cat /proc/net/wireless       - live link quality / noise
  */
 public class KindleSpectrum {
+
+    private static volatile boolean running = true;
 
     // 2.4 GHz channel -> center frequency (GHz). Kindle 4 supports 1-13.
     private static final double[] CH_FREQ = {
@@ -104,13 +105,18 @@ public class KindleSpectrum {
 
     public static void main(String[] args) {
         boolean active = args.length > 0 && args[0].equalsIgnoreCase("active");
-        System.out.println("=== Kindle 2.4GHz Spectrum Analyzer ===");
-        System.out.println("Mode: " + (active ? "ACTIVE (channel dwelling)" : "PASSIVE (scan grouping)"));
+        AppLog.init(System.getProperty("kindle.log.file", "spectrum.log"), 256 * 1024L);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            running = false;
+            AppLog.info("Shutdown requested for KindleSpectrum");
+        }, "shutdown-kindle-spectrum"));
+        AppLog.info("=== Kindle 2.4GHz Spectrum Analyzer ===");
+        AppLog.info("Mode: " + (active ? "ACTIVE (channel dwelling)" : "PASSIVE (scan grouping)"));
 
         // Persistent across scans: MAC -> hop history (time-series channel tracking)
         Map<String, HopRecord> hopTracker = new HashMap<>();
 
-        while (true) {
+        while (running) {
             Map<Integer, ChannelStats> spectrum = new HashMap<>();
             for (int c = 1; c <= MAX_CH; c++) spectrum.put(c, new ChannelStats());
             List<Obs> observations = new ArrayList<>();
@@ -127,7 +133,7 @@ public class KindleSpectrum {
 
                 renderSpectrum(spectrum, hopTracker, active);
             } catch (Exception e) {
-                System.err.println("Spectrum error: " + e.getMessage());
+                AppLog.exception("Spectrum error", e);
             }
 
             KindleUtils.sleep(3000);
@@ -177,16 +183,17 @@ public class KindleSpectrum {
      * PASSIVE: one scan, group APs by channel and collect per-AP observations.
      */
     private static void passiveScan(Map<Integer, ChannelStats> spectrum, List<Obs> observations) throws Exception {
-        Process p = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "scan"});
-        p.waitFor();
-        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-        String line;
+        String output = KindleUtils.readCommand("iwlist", "wlan0", "scan");
+        if (output == null || output.trim().isEmpty()) {
+            throw new Exception("iwlist scan returned no data");
+        }
+        String[] lines = output.split("\\r?\\n");
         String mac = "";
         String ssid = "";
         int channel = -1;
         int signal = -999;
 
-        while ((line = r.readLine()) != null) {
+        for (String line : lines) {
             String t = line.trim();
             if (t.contains("Address:")) {
                 int idx = t.indexOf("Address:");
@@ -229,7 +236,6 @@ public class KindleSpectrum {
                 signal = -999;
             }
         }
-        r.close();
     }
 
     /**
@@ -240,9 +246,9 @@ public class KindleSpectrum {
             // 1) Lock the radio to this channel's frequency
             String freq = String.format("%.3fG", CH_FREQ[c]);
             try {
-                Runtime.getRuntime().exec(new String[]{"iwconfig", "wlan0", "freq", freq}).waitFor();
+                KindleUtils.exec("iwconfig", "wlan0", "freq", freq);
             } catch (Exception e) {
-                System.err.println("freq set failed ch" + c + ": " + e.getMessage());
+                AppLog.warn("Frequency set failed ch" + c + ": " + e.getMessage());
             }
 
             // 2) Dwell so the radio settles
@@ -252,7 +258,7 @@ public class KindleSpectrum {
             int noise = readNoiseFloor();
             spectrum.get(c).noiseDbm = noise;
 
-            System.err.println("Dwell ch" + c + " (" + freq + ") noise=" + noise);
+            AppLog.info("Dwell ch" + c + " (" + freq + ") noise=" + noise);
         }
 
         // 4) After sweeping, one full scan to populate AP counts + observations
@@ -353,19 +359,19 @@ public class KindleSpectrum {
         }
 
         // ---- Console: full detail (unlimited) ----
-        System.out.println("\n===== SPECTRUM @ " + LocalTime.now().toString().substring(0, 8) + " =====");
+        AppLog.info("\n===== SPECTRUM @ " + LocalTime.now().toString().substring(0, 8) + " =====");
         for (int c = 1; c <= MAX_CH; c++) {
             ChannelStats cs = spectrum.get(c);
             String n = validNoise(cs.noiseDbm) ? (cs.noiseDbm + "dBm") : "n/a";
-            System.out.printf("Ch%2d %.3fGHz APs=%d peak=%ddBm noise=%s %s%n",
-                    c, CH_FREQ[c], cs.apCount, cs.peakDbm, n, cs.ssids);
+            AppLog.info(String.format("Ch%2d %.3fGHz APs=%d peak=%ddBm noise=%s %s",
+                    c, CH_FREQ[c], cs.apCount, cs.peakDbm, n, cs.ssids));
         }
         if (!hoppers.isEmpty()) {
-            System.out.println("--- CHANNEL HOPPERS (time-series) ---");
+            AppLog.info("--- CHANNEL HOPPERS (time-series) ---");
             for (HopRecord h : hoppers) {
                 long ageSec = (System.currentTimeMillis() - h.firstSeen) / 1000;
-                System.out.printf("%s hops=%d trail=%s sig=%ddBm age=%ds ssid=%s%n",
-                        h.mac, h.hopCount, h.channelHistory, h.lastSignal, ageSec, h.ssid);
+                AppLog.info(String.format("%s hops=%d trail=%s sig=%ddBm age=%ds ssid=%s",
+                        h.mac, h.hopCount, h.channelHistory, h.lastSignal, ageSec, h.ssid));
             }
         }
 

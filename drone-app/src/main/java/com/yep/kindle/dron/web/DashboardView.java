@@ -115,13 +115,15 @@ final class DashboardView {
             ".btn-wx:hover{background:#0891b2}" +
             ".btn-ht{background:#7c3aed;color:#ede9fe;width:100%;text-align:center}" +
             ".btn-ht:hover{background:#6d28d9}" +
+            ".btn-dt{background:#047857;color:#d1fae5;width:100%;text-align:center}" +
+            ".btn-dt:hover{background:#059669}" +
             ".btn-moon{background:#1e3a8a;color:#bfdbfe;width:100%;text-align:center}" +
             ".btn-moon:hover{background:#1e40af}" +
             ".btn-sw{background:#7f1d1d;color:#fecaca;width:100%;text-align:center}" +
             ".btn-sw:hover{background:#991b1b}" +
             ".btn-radar{background:#166534;color:#bbf7d0;width:100%;text-align:center}" +
             ".btn-radar:hover{background:#15803d}" +
-            ".btn-wx:disabled,.btn-ht:disabled,.btn-moon:disabled,.btn-sw:disabled,.btn-radar:disabled{background:#1e293b;color:#4b5563;cursor:default}" +
+            ".btn-wx:disabled,.btn-ht:disabled,.btn-dt:disabled,.btn-moon:disabled,.btn-sw:disabled,.btn-radar:disabled{background:#1e293b;color:#4b5563;cursor:default}" +
 
             // Toast
             ".toast{text-align:center;padding:8px 12px;border-radius:8px;font-size:12px;margin-top:4px;display:none}" +
@@ -134,7 +136,7 @@ final class DashboardView {
             "</style></head><body><div class='wrap'>" +
 
             "<h1>Kindle Drone<span class='dot'></span></h1>" +
-            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/logs'>Logs</a></div>" +
+            "<div class='nav'><a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/books'>Books</a><a href='/logs'>Logs</a></div>" +
 
             // ── Battery card ──────────────────────────────────────────────────
             "<div class='batt-card' id='bcard'>" +
@@ -254,6 +256,15 @@ final class DashboardView {
             "</div>" +
             "<div class='wx-btn-col'>" +
             "<div class='wx-tip'>" +
+            "Current date and time display\n" +
+            "Large digital clock, full date, calendar details\n" +
+            "Image: /mnt/us/drone-app/img/datetime.png\n" +
+            "Shown on Kindle via eips command" +
+            "</div>" +
+            "<button class='btn btn-dt' id='dtBtn' onclick='fetchDateTime()'>Date & Time</button>" +
+            "</div>" +
+            "<div class='wx-btn-col'>" +
+            "<div class='wx-tip'>" +
             "Moon phase calculated from lunar cycle\n" +
             "28-day calendar with phase icons\n" +
             "Image: /mnt/us/drone-app/img/moon.png\n" +
@@ -320,6 +331,7 @@ final class DashboardView {
 
             // ── Update DOM from /api/status response ──
             "function update(d){" +
+            "  if(d.rotationEnabled!==undefined){rotationOn=d.rotationEnabled;updateRotBtn();}" +
             // Battery
             "  var b=d.battery;" +
             "  document.getElementById('bpct').textContent=b>=0?b+'%':'--';" +
@@ -459,6 +471,7 @@ final class DashboardView {
             "  fetchView('wxBtn','/api/weather-refresh','Fetching weather…','Weather');" +
             "}" +
             "function fetchHomeTemp(){fetchView('htBtn','/api/hometemp-refresh','Reading temperature…','Home Temp');}" +
+            "function fetchDateTime(){fetchView('dtBtn','/api/datetime-refresh','Updating clock…','Date & Time');}" +
             "function fetchMoon(){fetchView('moonBtn','/api/moon-refresh','Generating moon calendar…','Moon Calendar');}" +
             "function fetchSpaceWeather(){fetchView('swBtn','/api/spaceweather-refresh','Fetching space weather…','Space Weather');}" +
             "function fetchRadar(){fetchView('radarBtn','/api/radar-refresh','Loading radar…','Radar');}" +

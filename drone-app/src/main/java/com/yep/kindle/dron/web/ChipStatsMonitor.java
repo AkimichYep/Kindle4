@@ -1,9 +1,8 @@
 package com.yep.kindle.dron.web;
 
 import com.yep.kindle.dron.util.AppLog;
+import com.yep.kindle.dron.util.KindleUtils;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -110,29 +109,14 @@ public class ChipStatsMonitor {
     }
 
     private void runPoll(boolean discard) throws Exception {
-        Process p = Runtime.getRuntime().exec(CMD);
-
-        final Process fp = p;
-        Thread errDrain = new Thread(() -> {
-            try {
-                byte[] buf = new byte[256];
-                while (fp.getErrorStream().read(buf) != -1) { /* discard */ }
-            } catch (Exception ignored) {}
-        }, "rf-err-drain");
-        errDrain.setDaemon(true);
-        errDrain.start();
-
-        StringBuilder raw = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-            String line;
-            while ((line = br.readLine()) != null) raw.append(line).append('\n');
+        String out = KindleUtils.readCommand(CMD);
+        if (out == null || out.trim().isEmpty()) {
+            throw new Exception("wmiconfig returned no stats output");
         }
-        p.waitFor();
 
         // First call: cumulative since boot — discard, used only to reset the counter.
         if (discard) return;
 
-        String out = raw.toString();
         int crc    = parseField(out, "rx_crcerr");
         int rssi   = parseField(out, "cs_rssi");
         int snr    = parseField(out, "cs_snr");

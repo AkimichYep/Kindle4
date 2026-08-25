@@ -60,7 +60,7 @@ final class LogsView {
                 "animation:pulse 2s infinite'></span></h1>" +
             "<style>@keyframes pulse{0%,100%{opacity:1}50%{opacity:.2}}</style>" +
             "<div class='nav'>" +
-            "<a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/logs' class='active'>Logs</a>" +
+            "<a href='/'>Dashboard</a><a href='/gallery'>Gallery</a><a href='/books'>Books</a><a href='/logs' class='active'>Logs</a>" +
             "</div>" +
             "<div class='file-row' id='fileRow'>" +
             "<button class='fbtn active' id='fbtn-live' onclick='selectLive()'>&#9679; Live</button>" +

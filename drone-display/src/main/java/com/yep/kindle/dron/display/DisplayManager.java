@@ -60,6 +60,17 @@ public class DisplayManager {
     }
 
     /**
+     * Show an animated time/day transition overlay before drawing the next page.
+     */
+    public void showTimeOverlay(DetectorContext ctx, long lineDelayMs, long holdMs) {
+        String[] sc = ScreenBuilder.buildTimeScreen(ctx);
+        switchAndDiffAnimated("transition", sc, lineDelayMs);
+        if (holdMs > 0) {
+            KindleUtils.sleep(holdMs);
+        }
+    }
+
+    /**
      * Animated page switch: forces a full clear if switching pages, then draws row-by-row top-to-bottom
      * with a small delay for a retro CRT scanline effect.
      */

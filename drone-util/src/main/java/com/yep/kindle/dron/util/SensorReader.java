@@ -33,7 +33,9 @@ public class SensorReader {
             try {
                 int v = Integer.parseInt(out);
                 if (v >= 0 && v <= 100) return v;
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException e) {
+                AppLog.warn("Battery service returned an invalid percentage: '" + out + "'");
+            }
         }
         // Fallback: yoshi sysfs returns e.g. "69%"
         String raw = readSysfs(BATTERY_SYSFS);
@@ -41,7 +43,9 @@ public class SensorReader {
             try {
                 int v = Integer.parseInt(raw.replace("%", "").trim());
                 if (v >= 0 && v <= 100) return v;
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException e) {
+                AppLog.warn("Battery sysfs returned an invalid percentage: '" + raw + "'");
+            }
         }
         return -1;
     }
@@ -52,7 +56,9 @@ public class SensorReader {
             "lipc-get-prop", "-i", "com.lab126.powerd", "isCharging");
         if (out != null && !out.isEmpty()) {
             try { return Integer.parseInt(out.trim()) != 0 ? 1 : 0; }
-            catch (NumberFormatException ignored) {}
+            catch (NumberFormatException e) {
+                AppLog.warn("Charging-status service returned an invalid value: '" + out + "'");
+            }
         }
         return -1;
     }
@@ -62,7 +68,9 @@ public class SensorReader {
         String raw = readSysfs(ROOM_TEMP_SYSFS);
         if (raw != null) {
             try { return Integer.parseInt(raw.trim()); }
-            catch (NumberFormatException ignored) {}
+            catch (NumberFormatException e) {
+                AppLog.warn("Room-temperature sensor returned an invalid value: '" + raw + "'");
+            }
         }
         return -1;
     }
@@ -78,7 +86,9 @@ public class SensorReader {
             try {
                 int fahrenheit = Integer.parseInt(raw.trim());
                 return Math.round((fahrenheit - 32.0) * 5.0 / 9.0 * 10.0) / 10.0;
-            } catch (NumberFormatException ignored) {}
+            } catch (NumberFormatException e) {
+                AppLog.warn("Battery-temperature sensor returned an invalid value: '" + raw + "'");
+            }
         }
         return -1.0;
     }
@@ -308,6 +318,7 @@ public class SensorReader {
             fw.write(String.valueOf(mA));
             return true;
         } catch (Exception e) {
+            AppLog.err("Could not set battery suspend current to " + mA + " mA: " + e.getMessage());
             return false;
         }
     }

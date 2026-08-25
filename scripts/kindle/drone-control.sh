@@ -17,6 +17,10 @@ pid_from_file() {
 }
 
 start() {
+  mkdir -p "$APP_DIR/logs" 2>/dev/null || {
+    echo "Cannot create log directory: $APP_DIR/logs" >&2
+    return 1
+  }
   "$DAEMON_SCRIPT" </dev/null >> "$DAEMON_LOG" 2>&1 &
   sleep 1
   status
@@ -55,9 +59,9 @@ status() {
 
 logs() {
   echo "=== daemon log (last 40) ==="
-  tail -n 40 "$DAEMON_LOG" 2>/dev/null
+  if [ -f "$DAEMON_LOG" ]; then tail -n 40 "$DAEMON_LOG"; else echo "No daemon log yet: $DAEMON_LOG"; fi
   echo "=== app log (last 40) ==="
-  tail -n 40 "$APP_LOG" 2>/dev/null
+  if [ -f "$APP_LOG" ]; then tail -n 40 "$APP_LOG"; else echo "No app log yet: $APP_LOG"; fi
 }
 
 case "$1" in

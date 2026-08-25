@@ -6,6 +6,8 @@ import com.yep.kindle.dron.display.KindleHttpClient;
 import com.yep.kindle.dron.display.KindleJsonParser;
 import com.yep.kindle.dron.display.KindleLayoutKit;
 import com.yep.kindle.dron.display.WeatherIconFont;
+import com.yep.kindle.dron.util.AppLog;
+import com.yep.kindle.dron.util.KindleUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.BasicStroke;
@@ -53,10 +55,14 @@ public class KindleMoonCalendarNoKey {
     private static final int GLYPH_FULL_MOON = 0xF0A3;
 
     public static void main(String[] args) {
+        AppLog.init(System.getProperty("kindle.log.file", "moon-calendar.log"), 256 * 1024L);
         try {
+            KindleUtils.syncSystemTimeZone();
             generateAndSave("kharkiv-moon-calendar.png");
+            AppLog.info("Moon calendar image saved: "
+                    + new File("kharkiv-moon-calendar.png").getAbsolutePath());
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.exception("Moon calendar image generation failed", e);
         }
     }
 
@@ -65,6 +71,7 @@ public class KindleMoonCalendarNoKey {
      * Called by KindleDroneDetectorPro for in-process image generation.
      */
     public static void generateAndSave(String outputPath) throws Exception {
+        KindleUtils.syncSystemTimeZone();
         String json = fetchMoonData();
         MoonCalendar calendar = parseMoonCalendar(json);
         BufferedImage image = renderMoonCalendar(calendar);

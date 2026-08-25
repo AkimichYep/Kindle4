@@ -73,8 +73,8 @@ public final class KindleWelcomePage {
         fm = g.getFontMetrics();
         String[] desc = {
             "Open the address above in your browser.",
-            "Configure City · Weather · Radar",
-            "Moon Calendar · Home Temp · Space Weather"
+            "Weather · Space Weather · Home Temp",
+            "Date & Time · Moon Calendar · Radar"
         };
         int lineH = fm.getHeight() + 6;
         int y = 350;

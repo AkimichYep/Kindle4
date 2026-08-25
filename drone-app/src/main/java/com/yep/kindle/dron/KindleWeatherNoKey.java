@@ -6,6 +6,8 @@ import com.yep.kindle.dron.display.KindleHttpClient;
 import com.yep.kindle.dron.display.KindleJsonParser;
 import com.yep.kindle.dron.display.KindleLayoutKit;
 import com.yep.kindle.dron.display.WeatherIconFont;
+import com.yep.kindle.dron.util.AppLog;
+import com.yep.kindle.dron.util.KindleUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.BasicStroke;
@@ -49,10 +51,12 @@ public class KindleWeatherNoKey {
     private static final DateTimeFormatter DATE_LABEL     = DateTimeFormatter.ofPattern("EEE, dd MMM", Locale.ENGLISH);
 
     public static void main(String[] args) {
+        AppLog.init(System.getProperty("kindle.log.file", "weather.log"), 256 * 1024L);
         try {
             generateAndSave("kharkiv-weather.png");
+            AppLog.info("Weather image saved: " + new File("kharkiv-weather.png").getAbsolutePath());
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.exception("Weather image generation failed", e);
         }
     }
 
@@ -75,6 +79,7 @@ public class KindleWeatherNoKey {
     /** Generate weather image for explicit coordinates and city label. */
     public static void generateAndSave(String outputPath, String cityLabel, String lat, String lon)
             throws Exception {
+        KindleUtils.syncSystemTimeZone();
         String weatherJson = fetchWeatherData(lat, lon);
         WeatherSnapshot snapshot = parseWeatherSnapshot(weatherJson);
         BufferedImage img = generateEInkImage(snapshot, cityLabel);

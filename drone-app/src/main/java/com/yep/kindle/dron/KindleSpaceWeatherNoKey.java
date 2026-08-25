@@ -6,6 +6,8 @@ import com.yep.kindle.dron.display.KindleHttpClient;
 import com.yep.kindle.dron.display.KindleJsonParser;
 import com.yep.kindle.dron.display.KindleLayoutKit;
 import com.yep.kindle.dron.display.WeatherIconFont;
+import com.yep.kindle.dron.util.AppLog;
+import com.yep.kindle.dron.util.KindleUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.Color;
@@ -49,10 +51,13 @@ public class KindleSpaceWeatherNoKey {
     private static final int GLYPH_SOLAR_ECLIPSE = 0xF06E; // wi-solar-eclipse
 
     public static void main(String[] args) {
+        AppLog.init(System.getProperty("kindle.log.file", "space-weather.log"), 256 * 1024L);
         try {
             generateAndSave("kindle-space-weather.png");
+            AppLog.info("Space-weather image saved: "
+                    + new File("kindle-space-weather.png").getAbsolutePath());
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.exception("Space-weather image generation failed", e);
         }
     }
 
@@ -61,6 +66,7 @@ public class KindleSpaceWeatherNoKey {
      * Called by KindleDroneDetectorPro for in-process image generation.
      */
     public static void generateAndSave(String outputPath) throws Exception {
+        KindleUtils.syncSystemTimeZone();
         List<SolarRegion> regions = fetchSolarRegions();
         List<XRayFlux>    xrays   = fetchXRayFlux();
         List<KpIndex>     kpList  = fetchKpIndex();

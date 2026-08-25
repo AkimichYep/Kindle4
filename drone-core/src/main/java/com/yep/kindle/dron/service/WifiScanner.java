@@ -1,8 +1,5 @@
 package com.yep.kindle.dron.service;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.util.ArrayList;
 import java.util.List;
 
 import com.yep.kindle.dron.model.AP;
@@ -63,69 +60,12 @@ public final class WifiScanner {
      * Run {@code iwlist wlan0 scan} and return all parsed access points.
      */
     public static List<AP> scan() {
-        List<AP> list = new ArrayList<>();
-        Process p = null;
-        try {
-            p = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "scan"});
-            final Process fp = p;
-            Thread errDrain = new Thread(() -> KindleUtils.drain(fp.getErrorStream()), "err-drain");
-            errDrain.setDaemon(true);
-            errDrain.start();
-
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            AP cur = null;
-            while ((line = r.readLine()) != null) {
-                String t = line.trim();
-                if (t.contains("Address:")) {
-                    if (cur != null && cur.signalDbm != -999) { finishAP(cur); list.add(cur); }
-                    cur = new AP();
-                    cur.mac = t.substring(t.indexOf("Address:") + 9).trim().toUpperCase();
-                } else if (cur == null) {
-                    continue;
-                } else if (t.startsWith("ESSID:")) {
-                    String v = t.substring(6).trim();
-                    if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2)
-                        v = v.substring(1, v.length() - 1);
-                    cur.ssid   = v.isEmpty() ? "[HIDDEN]" : v;
-                    cur.hidden = v.isEmpty();
-                } else if (t.startsWith("Mode:")) {
-                    cur.mode = t.substring(5).trim();
-                } else if (t.startsWith("Frequency:")) {
-                    int ci = t.indexOf("Channel");
-                    if (ci > 0) {
-                        try {
-                            cur.channel = Integer.parseInt(t.substring(ci + 8).replace(")", "").trim());
-                        } catch (NumberFormatException ignored) {}
-                    }
-                } else if (t.contains("Signal level=")) {
-                    try {
-                        int si = t.indexOf("Signal level=") + 13;
-                        int se = t.indexOf(" dBm", si);
-                        if (se > si) cur.signalDbm = Integer.parseInt(t.substring(si, se).trim());
-                    } catch (NumberFormatException ignored) {}
-                } else if (t.contains("WPA2") || t.contains("802.11i")) {
-                    cur.encryption = "WPA2";
-                } else if (t.contains("WPA Version")) {
-                    if (!cur.encryption.equals("WPA2")) cur.encryption = "WPA";
-                } else if (t.startsWith("Encryption key:on")) {
-                    if (cur.encryption.equals("Open")) cur.encryption = "WEP";
-                }
-            }
-            if (cur != null && cur.signalDbm != -999) { finishAP(cur); list.add(cur); }
-            r.close();
-            p.waitFor();
-        } catch (Exception e) {
-            AppLog.err("scan err: " + e.getMessage());
-        } finally {
-            if (p != null) p.destroy();
+        String output = KindleUtils.readCommand("iwlist", "wlan0", "scan");
+        if (output == null) {
+            AppLog.err("scan failed or timed out");
+            return java.util.Collections.emptyList();
         }
-        return list;
-    }
-
-    private static void finishAP(AP a) {
-        a.dist = WifiUtils.calculateDistance(a.signalDbm);
-        if (a.ssid == null || a.ssid.isEmpty()) { a.ssid = "[HIDDEN]"; a.hidden = true; }
+        return WifiScanParser.parse(output);
     }
 
     // =========================================================================
@@ -141,17 +81,13 @@ public final class WifiScanner {
      */
     public static long readStats(int[] result, boolean updateNoise) {
         long crc = 0;
-        Process p = null;
-        try {
-            p = Runtime.getRuntime().exec(new String[]{"wmiconfig", "-i", "wlan0", "--getTargetStats"});
-            final Process fp = p;
-            Thread errDrain = new Thread(() -> KindleUtils.drain(fp.getErrorStream()), "stat-err-drain");
-            errDrain.setDaemon(true);
-            errDrain.start();
-
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String line;
-            while ((line = r.readLine()) != null) {
+        if (result == null || result.length < 3) {
+            throw new IllegalArgumentException("result must contain crc, noise floor, and SNR slots");
+        }
+        String output = KindleUtils.readCommand("wmiconfig", "-i", "wlan0", "--getTargetStats");
+        if (output != null) {
+            String[] lines = output.split("\\r?\\n");
+            for (String line : lines) {
                 line = line.trim();
                 if (line.startsWith("rx_crcerr")) {
                     try { crc = Long.parseLong(line.split("=")[1].trim()); }
@@ -164,11 +100,6 @@ public final class WifiScanner {
                     catch (Exception ignored) {}
                 }
             }
-            r.close();
-            p.waitFor();
-        } catch (Exception ignored) {
-        } finally {
-            if (p != null) p.destroy();
         }
         result[0] = (int) crc;
         return crc;
