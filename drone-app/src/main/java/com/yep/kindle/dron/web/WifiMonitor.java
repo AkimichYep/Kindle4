@@ -1,9 +1,8 @@
 package com.yep.kindle.dron.web;
 
 import com.yep.kindle.dron.util.AppLog;
+import com.yep.kindle.dron.util.KindleUtils;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -97,34 +96,13 @@ public class WifiMonitor {
     }
 
     private void runScan(int n, long t0) throws Exception {
-        Process p = Runtime.getRuntime().exec(new String[]{"iwlist", IFACE, "scan"});
-
-        // Drain stderr to prevent subprocess blocking on a full pipe buffer.
-        final Process fp = p;
-        Thread errDrain = new Thread(() -> {
-            try {
-                byte[] buf = new byte[256];
-                while (fp.getErrorStream().read(buf) != -1) { /* discard */ }
-            } catch (Exception ignored) {}
-        }, "monitor-err-drain");
-        errDrain.setDaemon(true);
-        errDrain.start();
-
-        StringBuilder raw = new StringBuilder();
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(p.getInputStream()))) {
-            String line;
-            while ((line = br.readLine()) != null) {
-                raw.append(line).append('\n');
-            }
-        }
-        p.waitFor();
-
-        long elapsed = System.currentTimeMillis() - t0;
-        String output = raw.toString();
-        if (output.trim().isEmpty()) {
+        String output = KindleUtils.readCommand("iwlist", IFACE, "scan");
+        if (output == null || output.trim().isEmpty()) {
             push(logEvent("WARN", "Scan #" + n + " empty — interface down or scanning blocked"));
             return;
         }
+
+        long elapsed = System.currentTimeMillis() - t0;
         int apCount = parseAndPush(output, n);
         push(statusEvent("Scan #" + n + ": " + apCount + " AP" + (apCount != 1 ? "s" : "") + " in " + elapsed + " ms"));
         AppLog.info("[MONITOR] scan #" + n + " aps=" + apCount + " ms=" + elapsed);

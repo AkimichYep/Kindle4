@@ -3,6 +3,8 @@ package com.yep.kindle.dron.event;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
+import com.yep.kindle.dron.util.AppLog;
+
 /**
  * Minimal single-consumer event bus backed by a {@link LinkedBlockingQueue}.
  *
@@ -64,8 +66,8 @@ public final class EventBus {
         if (event == null) throw new NullPointerException("event");
         boolean accepted = queue.offer(event);
         if (!accepted) {
-            // Running on constrained hardware — stderr is cheap; no allocation.
-            System.err.println("[EventBus] WARN queue full, dropped " + event.type);
+            AppLog.warn("Event queue full; dropped " + event.type
+                    + " event (capacity=" + queue.size() + ")");
         }
         return accepted;
     }

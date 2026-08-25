@@ -39,16 +39,31 @@ public final class AppLog {
     // ── Initialisation ────────────────────────────────────────────────────────
 
     public static synchronized void init(String path, long maxBytes) {
-        KindleUtils.syncSystemTimeZone();
         filePath     = path;
         maxFileBytes = maxBytes;
         openFile();
+        KindleUtils.syncSystemTimeZone();
     }
 
     // ── Public log methods ────────────────────────────────────────────────────
 
     public static void info(String msg) { write("INFO", msg, false); }
+    public static void warn(String msg) { write("WARN", msg, false); }
     public static void err(String msg)  { write("ERR ", msg, true);  }
+
+    /** Records an actionable error summary followed by its stack trace. */
+    public static void exception(String context, Throwable error) {
+        String detail = error.getMessage();
+        err(context + ": " + error.getClass().getSimpleName()
+                + (detail == null || detail.isEmpty() ? "" : " — " + detail));
+        for (StackTraceElement element : error.getStackTrace()) {
+            err("  at " + element.toString());
+        }
+        Throwable cause = error.getCause();
+        if (cause != null && cause != error) {
+            exception(context + " (caused by)", cause);
+        }
+    }
 
     // ── Ring-buffer access (for /api/logs) ────────────────────────────────────
 
@@ -94,11 +109,15 @@ public final class AppLog {
     private static void openFile() {
         if (filePath == null) return;
         try {
-            new File(filePath).getParentFile().mkdirs();
+            File logFile = new File(filePath);
+            File parent = logFile.getParentFile();
+            if (parent != null && !parent.exists() && !parent.mkdirs()) {
+                System.err.println("AppLog: cannot create log directory " + parent.getAbsolutePath());
+            }
             fileWriter = new PrintWriter(new BufferedWriter(new OutputStreamWriter(
                 new FileOutputStream(filePath, true), StandardCharsets.UTF_8)), true);
-        } catch (IOException e) {
-            System.err.println("AppLog.openFile: " + e.getMessage());
+        } catch (Exception e) {
+            System.err.println("AppLog: cannot open log file '" + filePath + "': " + e.getMessage());
         }
     }
 

@@ -1,15 +1,18 @@
 package com.yep.kindle.dron.tool;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.time.LocalTime;
 import java.util.*;
 
 import com.yep.kindle.dron.detection.DroneSignatures;
+import com.yep.kindle.dron.model.AP;
+import com.yep.kindle.dron.service.WifiScanner;
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 import com.yep.kindle.dron.util.WifiUtils;
 
 public class KindleDroneDetector {
+
+    private static volatile boolean running = true;
 
     static class RFSignal {
         String macAddress = "";
@@ -33,6 +36,19 @@ public class KindleDroneDetector {
             this.distanceMeters = WifiUtils.calculateDistance(signalDbm);
             this.isHidden = (ssid == null || ssid.isEmpty() || ssid.equals("[HIDDEN]"));
         }
+    }
+
+    private static RFSignal fromAccessPoint(AP accessPoint) {
+        RFSignal signal = new RFSignal();
+        signal.macAddress = accessPoint.mac;
+        signal.ssid = accessPoint.ssid;
+        signal.channel = accessPoint.channel == 0 ? "" : String.valueOf(accessPoint.channel);
+        signal.signalDbm = accessPoint.signalDbm;
+        signal.distanceMeters = accessPoint.dist;
+        signal.mode = accessPoint.mode;
+        signal.encryption = accessPoint.encryption;
+        signal.isHidden = accessPoint.hidden;
+        return signal;
     }
 
     private static void scoreThreat(RFSignal s, Map<String, Integer> channelHops) {
@@ -60,83 +76,22 @@ public class KindleDroneDetector {
     }
 
     public static void main(String[] args) {
-        System.out.println("=== Kindle 4 Drone Detector Started ===");
+        AppLog.init(System.getProperty("kindle.log.file", "drone-detector-tool.log"), 256 * 1024L);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            running = false;
+            AppLog.info("Shutdown requested for KindleDroneDetector");
+        }, "shutdown-kindle-drone-detector"));
+        AppLog.info("=== Kindle 4 Drone Detector Started ===");
         printSupportedFrequencies();
 
         Map<String, Integer> lastSignalByMac = new HashMap<>();
 
-        while (true) {
+        while (running) {
             List<RFSignal> signals = new ArrayList<>();
             Map<String, Set<String>> macChannels = new HashMap<>();
 
             try {
-                Process process = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "scan"});
-                process.waitFor();
-
-                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                String line;
-                RFSignal cur = null;
-
-                while ((line = reader.readLine()) != null) {
-                    String t = line.trim();
-
-                    if (t.contains("Address:")) {
-                        if (cur != null && cur.signalDbm != -999) { cur.finalizeSignal(); signals.add(cur); }
-                        cur = new RFSignal();
-                        cur.macAddress = t.substring(t.indexOf("Address:") + 9).trim();
-                    } else if (cur == null) {
-                        continue;
-                    } else if (t.startsWith("ESSID:")) {
-                        String v = t.substring(6).trim();
-                        if (v.startsWith("\"") && v.endsWith("\"") && v.length() >= 2) v = v.substring(1, v.length() - 1);
-                        cur.ssid = v.isEmpty() ? "[HIDDEN]" : v;
-                    } else if (t.startsWith("Mode:")) {
-                        cur.mode = t.substring(5).trim();
-                    } else if (t.startsWith("Frequency:")) {
-                        String v = t.substring(10).trim();
-                        cur.frequency = v;
-                        int ch = v.indexOf("Channel");
-                        if (ch > 0) cur.channel = v.substring(ch + 8).replace(")", "").trim();
-                    } else if (t.startsWith("Protocol:")) {
-                        cur.protocol = t.substring(9).trim();
-                    } else if (t.startsWith("Bit Rates:")) {
-                        cur.bitRates = t.substring(10).trim();
-                    } else if (t.contains("Quality=")) {
-                        try {
-                            int qi = t.indexOf("Quality=") + 8;
-                            int qe = t.indexOf(" ", qi);
-                            String q = (qe > qi ? t.substring(qi, qe) : t.substring(qi)).trim();
-                            if (q.contains("/")) {
-                                String[] parts = q.split("/");
-                                cur.qualityNum = Integer.parseInt(parts[0].trim());
-                                cur.qualityMax = Integer.parseInt(parts[1].trim());
-                            }
-                        } catch (Exception ignored) {}
-
-                        if (t.contains("Signal level=")) {
-                            try {
-                                int si = t.indexOf("Signal level=") + 13;
-                                int se = t.indexOf(" dBm", si);
-                                if (se > si) cur.signalDbm = Integer.parseInt(t.substring(si, se).trim());
-                            } catch (Exception ignored) {}
-                        }
-                        if (t.contains("Noise level=")) {
-                            try {
-                                int ni = t.indexOf("Noise level=") + 12;
-                                int ne = t.indexOf(" dBm", ni);
-                                if (ne > ni) cur.noiseDbm = Integer.parseInt(t.substring(ni, ne).trim());
-                            } catch (Exception ignored) {}
-                        }
-                    } else if (t.startsWith("Encryption key:")) {
-                        cur.encryption = t.substring(15).trim().equalsIgnoreCase("on") ? "WEP?" : "Open";
-                    } else if (t.contains("WPA2") || t.contains("802.11i")) {
-                        cur.encryption = "WPA2";
-                    } else if (t.contains("WPA Version")) {
-                        if (!cur.encryption.equals("WPA2")) cur.encryption = "WPA";
-                    }
-                }
-                if (cur != null && cur.signalDbm != -999) { cur.finalizeSignal(); signals.add(cur); }
-                reader.close();
+                for (AP accessPoint : WifiScanner.scan()) signals.add(fromAccessPoint(accessPoint));
 
                 for (RFSignal s : signals) macChannels.computeIfAbsent(s.macAddress, k -> new HashSet<>()).add(s.channel);
                 Map<String, Integer> channelHops = new HashMap<>();
@@ -155,19 +110,19 @@ public class KindleDroneDetector {
                 signals.sort((a, b) -> b.threatScore != a.threatScore ? b.threatScore - a.threatScore
                         : Double.compare(a.distanceMeters, b.distanceMeters));
 
-                System.err.println("DEBUG: signals=" + signals.size());
+                AppLog.info("DEBUG signals=" + signals.size());
 
-                System.out.println("\n===== FULL SCAN (" + signals.size() + " APs) @ "
+                AppLog.info("\n===== FULL SCAN (" + signals.size() + " APs) @ "
                         + LocalTime.now().toString().substring(0, 8) + " =====");
                 int idxLog = 1;
                 for (RFSignal s : signals) {
                     String vend = DroneSignatures.lookupOUI(s.macAddress);
-                    System.out.printf("%2d) %-17s %-14s C%-3s %4ddBm %5.0fm Q%d/%d %-4s thr=%d %s%n",
+                    AppLog.info(String.format("%2d) %-17s %-14s C%-3s %4ddBm %5.0fm Q%d/%d %-4s thr=%d %s",
                             idxLog++, s.macAddress, s.ssid,
                             s.channel.isEmpty() ? "?" : s.channel,
                             s.signalDbm, s.distanceMeters, s.qualityNum, s.qualityMax,
                             s.encryption, s.threatScore,
-                            (vend != null ? "<" + vend + "> " : "") + s.threatReason);
+                            (vend != null ? "<" + vend + "> " : "") + s.threatReason));
                 }
 
                 StringBuilder hud = new StringBuilder();
@@ -194,13 +149,13 @@ public class KindleDroneDetector {
                         hud.append(row).append("\n");
                         count++;
                     }
-                    if (signals.size() > maxRows) hud.append("...+").append(signals.size() - maxRows).append(" more (see console)\n");
+                    if (signals.size() > maxRows) hud.append("...+").append(signals.size() - maxRows).append(" more (see logs)\n");
                 }
 
                 KindleUtils.renderToEInk(hud.toString());
 
             } catch (Exception e) {
-                System.err.println("Detector Error: " + e.getMessage());
+                AppLog.exception("Detector loop error", e);
             }
 
             KindleUtils.sleep(4000);
@@ -208,16 +163,9 @@ public class KindleDroneDetector {
     }
 
     private static void printSupportedFrequencies() {
-        try {
-            System.out.println("--- Supported frequencies (iwlist wlan0 frequency) ---");
-            Process p = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "frequency"});
-            p.waitFor();
-            BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream()));
-            String l;
-            while ((l = r.readLine()) != null) System.out.println(l);
-            r.close();
-        } catch (Exception e) {
-            System.err.println("Could not list frequencies: " + e.getMessage());
-        }
+        AppLog.info("--- Supported frequencies (iwlist wlan0 frequency) ---");
+        String output = KindleUtils.readCommand("iwlist", "wlan0", "frequency");
+        if (output != null) AppLog.info(output);
+        else AppLog.err("Could not list frequencies (command failed or timed out)");
     }
 }

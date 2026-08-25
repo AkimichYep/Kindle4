@@ -35,12 +35,13 @@ public class KindleDateTime {
     private static final DateTimeFormatter TIME_UTC   = DateTimeFormatter.ofPattern("HH:mm:ss 'UTC'");
 
     public static void main(String[] args) {
+        AppLog.init(System.getProperty("kindle.log.file", "datetime.log"), 256 * 1024L);
         try {
             String out = args.length > 0 ? args[0] : "datetime.png";
             generateAndSave(out);
-            AppLog.info("Saved: " + new File(out).getAbsolutePath());
+            AppLog.info("Date/time image saved: " + new File(out).getAbsolutePath());
         } catch (Exception e) {
-            e.printStackTrace();
+            AppLog.exception("Date/time image generation failed", e);
         }
     }
 

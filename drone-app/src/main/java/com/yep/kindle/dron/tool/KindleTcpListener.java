@@ -16,6 +16,7 @@ import java.time.LocalDateTime;
 
 import com.yep.kindle.dron.event.AppEvent;
 import com.yep.kindle.dron.event.EventBus;
+import com.yep.kindle.dron.util.AppLog;
 
 public class KindleTcpListener {
     private static final int PORT = 5555;
@@ -26,6 +27,7 @@ public class KindleTcpListener {
     private static volatile long overlaySeq = 0;
     private static volatile long refreshAndNextSeq = 0;
     private static volatile boolean started = false;
+    private static volatile boolean running = true;
 
     public static final class OverlaySnapshot {
         public final long id;
@@ -52,6 +54,11 @@ public class KindleTcpListener {
     }
 
     public static void main(String[] args) {
+        AppLog.init(System.getProperty("kindle.log.file", "tcp-listener.log"), 256 * 1024L);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            running = false;
+            AppLog.info("Shutdown requested for KindleTcpListener");
+        }, "shutdown-kindle-tcp-listener"));
         runLoop();
     }
 
@@ -60,6 +67,7 @@ public class KindleTcpListener {
             return false;
         }
         started = true;
+        running = true;
         Thread thread = new Thread(KindleTcpListener::runLoop, "kindle-tcp-listener");
         thread.setDaemon(true);
         thread.start();
@@ -104,72 +112,74 @@ public class KindleTcpListener {
     }
 
     private static void runLoop() {
-        System.out.println("=== Kindle TCP Drone Listener Active on port " + PORT + " ===");
-        try {
+        AppLog.info("=== Kindle TCP Drone Listener Active on port " + PORT + " ===");
+        try (ServerSocket serverSocket = new ServerSocket()) {
             // Explicitly bind to 0.0.0.0 (all interfaces, including wlan0)
-            ServerSocket serverSocket = new ServerSocket();
             serverSocket.setReuseAddress(true);
             serverSocket.bind(new InetSocketAddress("0.0.0.0", PORT));
+            serverSocket.setSoTimeout(1_000);
 
-            while (true) {
+            while (running) {
                 try (Socket clientSocket = serverSocket.accept()) {
                     handleClient(clientSocket);
                 } catch (Exception e) {
-                    System.err.println("Read error: " + e.getMessage());
+                    if (e instanceof java.net.SocketTimeoutException) continue;
+                    AppLog.exception("TCP listener read error", e);
                 }
             }
         } catch (Exception e) {
-            System.err.println("Server exception: " + e.getMessage());
+            AppLog.exception("TCP listener server exception", e);
         }
     }
 
     private static void handleClient(Socket clientSocket) throws IOException {
-        BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8));
-        String firstLine = reader.readLine();
-        if (firstLine == null) {
-            return;
-        }
-
-        if (isHttpRequestLine(firstLine)) {
-            String path = extractRequestPath(firstLine);
-
-            if ("/health".equals(path)) {
-                sendHttpResponse(clientSocket.getOutputStream(), "200 OK", "text/plain; charset=UTF-8", "ok".getBytes(StandardCharsets.UTF_8));
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream(), StandardCharsets.UTF_8))) {
+            String firstLine = reader.readLine();
+            if (firstLine == null) {
                 return;
             }
 
-            if (pathEquals(path, CONTROL_NEXT_REFRESH) || pathStartsWith(path, CONTROL_NEXT_REFRESH + "?")) {
-                long seq = requestRefreshAndNextPage();
-                byte[] body = ("queued refresh+next seq=" + seq).getBytes(StandardCharsets.UTF_8);
-                sendHttpResponse(clientSocket.getOutputStream(), "200 OK", "text/plain; charset=UTF-8", body);
+            if (isHttpRequestLine(firstLine)) {
+                String path = extractRequestPath(firstLine);
+
+                if ("/health".equals(path)) {
+                    sendHttpResponse(clientSocket.getOutputStream(), "200 OK", "text/plain; charset=UTF-8", "ok".getBytes(StandardCharsets.UTF_8));
+                    return;
+                }
+
+                if (pathEquals(path, CONTROL_NEXT_REFRESH) || pathStartsWith(path, CONTROL_NEXT_REFRESH + "?")) {
+                    long seq = requestRefreshAndNextPage();
+                    byte[] body = ("queued refresh+next seq=" + seq).getBytes(StandardCharsets.UTF_8);
+                    sendHttpResponse(clientSocket.getOutputStream(), "200 OK", "text/plain; charset=UTF-8", body);
+                    return;
+                }
+
+                // Serve weather icon font so the browser can render a weather-style header icon.
+                if (path.startsWith("/font/")) {
+                    serveResource(clientSocket.getOutputStream(), path.substring(1));
+                    return;
+                }
+
+                String messageFromRequest = extractMessageFromPath(path);
+                if (messageFromRequest != null && !messageFromRequest.trim().isEmpty()) {
+                    publishOverlayMessage(messageFromRequest, DEFAULT_OVERLAY_MS);
+                    logMessage("HTTP", lastMessage);
+                }
+
+                String body = buildHtml(lastMessage);
+                sendHttpResponse(clientSocket.getOutputStream(), "200 OK", "text/html; charset=UTF-8", body.getBytes(StandardCharsets.UTF_8));
                 return;
             }
 
-            // Serve weather icon font so the browser can render a weather-style header icon.
-            if (path.startsWith("/font/")) {
-                serveResource(clientSocket.getOutputStream(), path.substring(1));
+            String parsed = parseTcpMessage(firstLine);
+            if (isRefreshAndNextCommand(parsed)) {
+                requestRefreshAndNextPage();
                 return;
             }
-
-            String messageFromRequest = extractMessageFromPath(path);
-            if (messageFromRequest != null && !messageFromRequest.trim().isEmpty()) {
-                publishOverlayMessage(messageFromRequest, DEFAULT_OVERLAY_MS);
-                logMessage("HTTP", lastMessage);
+            if (parsed != null && !parsed.trim().isEmpty()) {
+                publishOverlayMessage(parsed, DEFAULT_OVERLAY_MS);
+                logMessage("TCP", lastMessage);
             }
-
-            String body = buildHtml(lastMessage);
-            sendHttpResponse(clientSocket.getOutputStream(), "200 OK", "text/html; charset=UTF-8", body.getBytes(StandardCharsets.UTF_8));
-            return;
-        }
-
-        String parsed = parseTcpMessage(firstLine);
-        if (isRefreshAndNextCommand(parsed)) {
-            requestRefreshAndNextPage();
-            return;
-        }
-        if (parsed != null && !parsed.trim().isEmpty()) {
-            publishOverlayMessage(parsed, DEFAULT_OVERLAY_MS);
-            logMessage("TCP", lastMessage);
         }
     }
 
@@ -266,7 +276,7 @@ public class KindleTcpListener {
 
     private static void logMessage(String source, String message) {
         String timestamp = LocalDateTime.now().toString();
-        System.out.println("[" + timestamp + "] " + source + " RECEIVED: " + message);
+        AppLog.info("[" + timestamp + "] " + source + " RECEIVED: " + message);
     }
 
     private static String buildHtml(String message) {
@@ -301,29 +311,33 @@ public class KindleTcpListener {
     }
 
     private static void serveResource(OutputStream out, String resourcePath) throws IOException {
-        InputStream input = KindleTcpListener.class.getClassLoader().getResourceAsStream(resourcePath);
-        if (input == null) {
-            sendHttpResponse(out, "404 Not Found", "text/plain; charset=UTF-8", "Not found".getBytes(StandardCharsets.UTF_8));
-            return;
-        }
+        try (InputStream input = KindleTcpListener.class.getClassLoader().getResourceAsStream(resourcePath)) {
+            if (input == null) {
+                sendHttpResponse(out, "404 Not Found", "text/plain; charset=UTF-8", "Not found".getBytes(StandardCharsets.UTF_8));
+                return;
+            }
 
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        byte[] buffer = new byte[4096];
-        int read;
-        while ((read = input.read(buffer)) != -1) {
-            baos.write(buffer, 0, read);
-        }
+            byte[] payload;
+            try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
+                byte[] buffer = new byte[4096];
+                int read;
+                while ((read = input.read(buffer)) != -1) {
+                    baos.write(buffer, 0, read);
+                }
+                payload = baos.toByteArray();
+            }
 
-        String contentType = "application/octet-stream";
-        if (resourcePath.endsWith(".ttf")) {
-            contentType = "font/ttf";
-        } else if (resourcePath.endsWith(".woff")) {
-            contentType = "font/woff";
-        } else if (resourcePath.endsWith(".woff2")) {
-            contentType = "font/woff2";
-        }
+            String contentType = "application/octet-stream";
+            if (resourcePath.endsWith(".ttf")) {
+                contentType = "font/ttf";
+            } else if (resourcePath.endsWith(".woff")) {
+                contentType = "font/woff";
+            } else if (resourcePath.endsWith(".woff2")) {
+                contentType = "font/woff2";
+            }
 
-        sendHttpResponse(out, "200 OK", contentType, baos.toByteArray());
+            sendHttpResponse(out, "200 OK", contentType, payload);
+        }
     }
 
     private static void sendHttpResponse(OutputStream out, String status, String contentType, byte[] body) throws IOException {

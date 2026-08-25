@@ -41,22 +41,27 @@ public final class KindleHttpClient {
      */
     public static String get(String urlString, String userAgent) throws Exception {
         URL url = new URL(urlString);
-        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-        conn.setRequestMethod("GET");
-        conn.setRequestProperty("User-Agent", userAgent);
-        conn.setConnectTimeout(DEFAULT_TIMEOUT_MS);
-        conn.setReadTimeout(DEFAULT_TIMEOUT_MS);
+        HttpURLConnection conn = null;
+        try {
+            conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setRequestProperty("User-Agent", userAgent);
+            conn.setConnectTimeout(DEFAULT_TIMEOUT_MS);
+            conn.setReadTimeout(DEFAULT_TIMEOUT_MS);
 
-        int responseCode = conn.getResponseCode();
-        if (responseCode != 200) {
-            String errorBody = readStream(conn.getErrorStream());
-            throw new RuntimeException(
-                    "HTTP GET failed: " + responseCode
-                    + " | URL: " + urlString
-                    + " | Body: " + errorBody);
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) {
+                String errorBody = readStream(conn.getErrorStream());
+                throw new RuntimeException(
+                        "HTTP GET failed: " + responseCode
+                                + " | URL: " + urlString
+                                + " | Body: " + errorBody);
+            }
+
+            return readStream(conn.getInputStream());
+        } finally {
+            if (conn != null) conn.disconnect();
         }
-
-        return readStream(conn.getInputStream());
     }
 
     /**

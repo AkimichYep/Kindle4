@@ -1,16 +1,17 @@
 package com.yep.kindle.dron.tool;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
+import com.yep.kindle.dron.util.AppLog;
 import com.yep.kindle.dron.util.KindleUtils;
 import com.yep.kindle.dron.util.WifiUtils;
 
 public class KindleWifiHud {
+
+    private static volatile boolean running = true;
 
     static class AccessPoint {
         String ssid;
@@ -25,26 +26,28 @@ public class KindleWifiHud {
     }
 
     public static void main(String[] args) {
-        System.out.println("=== Kindle Synchronized Wi-Fi HUD Started ===");
+        AppLog.init(System.getProperty("kindle.log.file", "wifi-hud.log"), 256 * 1024L);
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            running = false;
+            AppLog.info("Shutdown requested for KindleWifiHud");
+        }, "shutdown-kindle-wifi-hud"));
+        AppLog.info("=== Kindle Synchronized Wi-Fi HUD Started ===");
 
-        while (true) {
+        while (running) {
             List<AccessPoint> apList = new ArrayList<>();
             try {
-                // Execute iwlist scan
-                Process process = Runtime.getRuntime().exec(new String[]{"iwlist", "wlan0", "scan"});
-
-                // CRITICAL FIX: Wait for the system scan process to fully execute and finish before reading
-                int exitCode = process.waitFor();
-                if (exitCode != 0) {
-                    System.err.println("iwlist failed or returned non-zero exit code.");
+                String output = KindleUtils.readCommand("iwlist", "wlan0", "scan");
+                if (output == null || output.trim().isEmpty()) {
+                    AppLog.warn("iwlist scan produced no output");
+                    KindleUtils.sleep(1000);
+                    continue;
                 }
 
-                BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-                String line;
                 String currentSsid = "Unknown";
                 int currentSignal = -999;
 
-                while ((line = reader.readLine()) != null) {
+                String[] lines = output.split("\\r?\\n");
+                for (String line : lines) {
                     line = line.trim();
                     if (line.startsWith("ESSID:")) {
                         String marker = "ESSID:";
@@ -53,7 +56,7 @@ public class KindleWifiHud {
                         if (currentSsid.startsWith("\"") && currentSsid.endsWith("\"")) {
                             currentSsid = currentSsid.substring(1, currentSsid.length() - 1);
                         }
-                        System.err.println("DEBUG: Found ESSID: " + currentSsid);
+                        AppLog.info("DEBUG Found ESSID: " + currentSsid);
                     } else if (line.contains("Signal level=")) {
                         try {
                             String marker = "Signal level=";
@@ -62,18 +65,17 @@ public class KindleWifiHud {
                             if (endIdx > startIdx) {
                                 String signalStr = line.substring(startIdx, endIdx).trim();
                                 currentSignal = Integer.parseInt(signalStr);
-                                System.err.println("DEBUG: Found Signal: " + currentSignal + " for " + currentSsid);
+                                AppLog.info("DEBUG Found Signal: " + currentSignal + " for " + currentSsid);
                                 apList.add(new AccessPoint(currentSsid, currentSignal));
                                 currentSsid = "Unknown";
                                 currentSignal = -999;
                             }
                         } catch (Exception e) {
-                            System.err.println("DEBUG: Signal parsing error: " + e.getMessage() + " | Line: " + line);
+                            AppLog.warn("DEBUG Signal parsing error: " + e.getMessage() + " | line=" + line);
                         }
                     }
                 }
-                reader.close();
-                System.err.println("DEBUG: Total APs found: " + apList.size());
+                AppLog.info("DEBUG Total APs found: " + apList.size());
 
                 apList.sort(Comparator.comparingDouble(ap -> ap.distanceMeters));
 
@@ -83,7 +85,7 @@ public class KindleWifiHud {
 
                 if (apList.isEmpty()) {
                     hudText.append("No networks found.\n");
-                    System.err.println("DEBUG: No networks found!");
+                    AppLog.info("DEBUG No networks found");
                 } else {
                     int count = 0;
                     for (AccessPoint ap : apList) {
@@ -91,7 +93,7 @@ public class KindleWifiHud {
                             String distanceStr = String.format("%.1f", ap.distanceMeters);
                             String displayLine = distanceStr + "m | " + ap.signalDbm + "dBm | " + ap.ssid;
                             hudText.append(displayLine).append("\n");
-                            System.err.println("DEBUG: Displaying: " + displayLine);
+                            AppLog.info("DEBUG Displaying: " + displayLine);
                             count++;
                         }
                     }
@@ -100,7 +102,7 @@ public class KindleWifiHud {
                 KindleUtils.renderToEInk(hudText.toString());
 
             } catch (Exception e) {
-                System.err.println("HUD Error: " + e.getMessage());
+                AppLog.exception("HUD error", e);
             }
 
             KindleUtils.sleep(10000);
