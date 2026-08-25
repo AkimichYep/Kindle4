@@ -4,6 +4,7 @@ import com.yep.kindle.dron.display.KindleCanvas;
 import com.yep.kindle.dron.display.KindleLayoutKit;
 import com.yep.kindle.dron.display.WeatherIconFont;
 import com.yep.kindle.dron.util.AppLog;
+import com.yep.kindle.dron.util.KindleUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.Color;
@@ -49,6 +50,7 @@ public class KindleDateTime {
     }
 
     public static BufferedImage render() {
+        KindleUtils.syncSystemTimeZone();
         BufferedImage img = KindleCanvas.newImage();
         Graphics2D g = KindleCanvas.createGraphics(img);
 

@@ -92,6 +92,9 @@ public class KindleDroneDetectorPro {
     static final long RADAR_HOLD_MS     = 30_000L;   // 30 s
     static final long DATETIME_HOLD_MS  = 30_000L;   // 30 s
     static final long MESSAGE_HOLD_MS   = 20_000L;   // 20 s temporary message overlay
+    static final boolean TRANSITION_OVERLAY_ENABLED = true;
+    static final long TRANSITION_OVERLAY_LINE_DELAY_MS = 18L;
+    static final long TRANSITION_OVERLAY_HOLD_MS = 900L;
     /** Re-render an info page PNG only if it is older than this (ms). */
     static final long INFO_REGEN_MS     = 10 * 60_000L; // 10 min
 
@@ -170,6 +173,7 @@ public class KindleDroneDetectorPro {
         System.setProperty("file.encoding", "UTF-8");
         System.setProperty("sun.jnu.encoding", "UTF-8");
         System.setProperty("java.awt.headless", "true");
+        KindleUtils.syncSystemTimeZone();
         AppLog.info("=== KindleDroneDetectorPro v2.5-event ===");
 
         // ── Shared state ─────────────────────────────────────────────────────
@@ -572,6 +576,10 @@ public class KindleDroneDetectorPro {
      */
     static void generateAndShowPage(int page, DetectorContext ctx, DisplayManager display,
                                      boolean firstRun, RadarImageManager radarMgr) {
+        if (TRANSITION_OVERLAY_ENABLED && page != PAGE_RADAR) {
+            display.showTimeOverlay(ctx, TRANSITION_OVERLAY_LINE_DELAY_MS, TRANSITION_OVERLAY_HOLD_MS);
+        }
+
         switch (page) {
             case PAGE_WEATHER:
             case PAGE_SPACE:

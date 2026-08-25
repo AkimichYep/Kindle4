@@ -28,6 +28,7 @@ APP_JAR="${APP_JAR:-$APP_DIR/drone-app-2.0.0-SNAPSHOT.jar}"
 JAVA_BIN="${JAVA_BIN:-/mnt/us/java/jre/bin/java}"
 APP_LOG="${APP_LOG:-$APP_DIR/logs/app.log}"
 LISTENER_LOG="${LISTENER_LOG:-$APP_DIR/logs/drone-button-waitforkey.log}"
+START_SCRIPT="${START_SCRIPT:-/mnt/us/drone-start.sh}"
 IPTABLES_BIN="${IPTABLES_BIN:-/usr/sbin/iptables}"
 IPTABLES_SAVE_BIN="${IPTABLES_SAVE_BIN:-/usr/sbin/iptables-save}"
 LISTENER_PORT="${LISTENER_PORT:-5555}"
@@ -102,8 +103,12 @@ start_app() {
     return 0
   fi
 
-  mkdir -p "$APP_DIR/logs" 2>/dev/null || true
-  cd "$APP_DIR" && "$JAVA_BIN" -jar "$APP_JAR" </dev/null >> "$APP_LOG" 2>&1 &
+  if [ ! -x "$START_SCRIPT" ]; then
+    log "app start failed: missing launcher $START_SCRIPT"
+    return 1
+  fi
+
+  "$START_SCRIPT"
   sleep 1
 
   if pgrep -f 'drone-app-2.0.0-SNAPSHOT.jar' >/dev/null 2>&1; then

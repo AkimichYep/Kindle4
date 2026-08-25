@@ -4,6 +4,9 @@ public class KindleUtils {
 
     public static final int ROWS = 40;
     public static final int COLS = 50;
+    private static final long TZ_SYNC_MIN_INTERVAL_MS = 60_000L;
+    private static volatile long lastTzSyncAtMs = 0L;
+    private static volatile Integer lastTzOffsetMinutes = null;
 
     /**
      * Executes a command and returns its trimmed stdout, or null on error.
@@ -33,25 +36,57 @@ public class KindleUtils {
     }
 
     /**
-     * Synchronizes Java's default TimeZone with the Kindle system Linux `date` time.
-     * On Kindle Linux embedded JVMs, `date +%z` reports standard EET (+0200), but system time is in EEST (+0300)
-     * during Daylight Saving Time. We compare system `date +%H` directly with JVM UTC to set the exact offset.
+     * Synchronizes Java's default TimeZone with Linux `date` output.
+     * Uses local HH:mm vs UTC HH:mm from the OS clock to avoid JVM tzdata quirks.
      */
-    public static void syncSystemTimeZone() {
+    public static synchronized void syncSystemTimeZone() {
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastTzSyncAtMs < TZ_SYNC_MIN_INTERVAL_MS) return;
+        lastTzSyncAtMs = nowMs;
+
         try {
-            String sysHourStr = readCommand("date", "+%H");
-            if (sysHourStr != null && sysHourStr.matches("\\d{1,2}")) {
-                int sysHour = Integer.parseInt(sysHourStr);
-                java.util.Calendar utcCal = java.util.Calendar.getInstance(java.util.TimeZone.getTimeZone("UTC"));
-                int utcHour = utcCal.get(java.util.Calendar.HOUR_OF_DAY);
-                int diffHours = (sysHour - utcHour + 24) % 24;
-                if (diffHours > 12) diffHours -= 24;
-                String gmtTz = String.format("GMT%+03d:00", diffHours);
-                java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(gmtTz));
-                AppLog.info("Synced Java TimeZone via sysHour diff (sysDate=" + sysHour + "h, utc=" + utcHour + "h): " + gmtTz);
+            String localHm = readCommand("date", "+%H:%M");
+            String utcHm = readCommand("date", "-u", "+%H:%M");
+            Integer localMin = parseHourMinuteToTotalMinutes(localHm);
+            Integer utcMin = parseHourMinuteToTotalMinutes(utcHm);
+            if (localMin == null || utcMin == null) {
+                AppLog.err("syncSystemTimeZone: unable to parse local/utc time (local=" + localHm + ", utc=" + utcHm + ")");
+                return;
+            }
+
+            int diffMin = localMin - utcMin;
+            while (diffMin <= -720) diffMin += 1440;
+            while (diffMin > 840) diffMin -= 1440;
+
+            int abs = Math.abs(diffMin);
+            int hh = abs / 60;
+            int mm = abs % 60;
+            String sign = diffMin >= 0 ? "+" : "-";
+            String gmtTz = String.format("GMT%s%02d:%02d", sign, hh, mm);
+
+            java.util.TimeZone tz = java.util.TimeZone.getTimeZone(gmtTz);
+            java.util.TimeZone.setDefault(tz);
+            System.setProperty("user.timezone", tz.getID());
+
+            Integer prev = lastTzOffsetMinutes;
+            lastTzOffsetMinutes = diffMin;
+            if (prev == null || prev.intValue() != diffMin) {
+                AppLog.info("Synced Java TimeZone (local=" + localHm + ", utc=" + utcHm + "): " + gmtTz);
             }
         } catch (Exception e) {
             AppLog.err("syncSystemTimeZone failed: " + e.getMessage());
+        }
+    }
+
+    private static Integer parseHourMinuteToTotalMinutes(String hhmm) {
+        if (hhmm == null || !hhmm.matches("\\d{2}:\\d{2}")) return null;
+        try {
+            int hh = Integer.parseInt(hhmm.substring(0, 2));
+            int mm = Integer.parseInt(hhmm.substring(3, 5));
+            if (hh < 0 || hh > 23 || mm < 0 || mm > 59) return null;
+            return hh * 60 + mm;
+        } catch (Exception ignored) {
+            return null;
         }
     }
 

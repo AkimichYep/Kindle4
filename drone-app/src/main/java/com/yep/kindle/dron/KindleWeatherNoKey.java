@@ -6,6 +6,7 @@ import com.yep.kindle.dron.display.KindleHttpClient;
 import com.yep.kindle.dron.display.KindleJsonParser;
 import com.yep.kindle.dron.display.KindleLayoutKit;
 import com.yep.kindle.dron.display.WeatherIconFont;
+import com.yep.kindle.dron.util.KindleUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.BasicStroke;
@@ -75,6 +76,7 @@ public class KindleWeatherNoKey {
     /** Generate weather image for explicit coordinates and city label. */
     public static void generateAndSave(String outputPath, String cityLabel, String lat, String lon)
             throws Exception {
+        KindleUtils.syncSystemTimeZone();
         String weatherJson = fetchWeatherData(lat, lon);
         WeatherSnapshot snapshot = parseWeatherSnapshot(weatherJson);
         BufferedImage img = generateEInkImage(snapshot, cityLabel);

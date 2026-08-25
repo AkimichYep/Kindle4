@@ -6,6 +6,7 @@ import com.yep.kindle.dron.display.KindleHttpClient;
 import com.yep.kindle.dron.display.KindleJsonParser;
 import com.yep.kindle.dron.display.KindleLayoutKit;
 import com.yep.kindle.dron.display.WeatherIconFont;
+import com.yep.kindle.dron.util.KindleUtils;
 
 import javax.imageio.ImageIO;
 import java.awt.BasicStroke;
@@ -54,6 +55,7 @@ public class KindleMoonCalendarNoKey {
 
     public static void main(String[] args) {
         try {
+            KindleUtils.syncSystemTimeZone();
             generateAndSave("kharkiv-moon-calendar.png");
         } catch (Exception e) {
             e.printStackTrace();
@@ -65,6 +67,7 @@ public class KindleMoonCalendarNoKey {
      * Called by KindleDroneDetectorPro for in-process image generation.
      */
     public static void generateAndSave(String outputPath) throws Exception {
+        KindleUtils.syncSystemTimeZone();
         String json = fetchMoonData();
         MoonCalendar calendar = parseMoonCalendar(json);
         BufferedImage image = renderMoonCalendar(calendar);

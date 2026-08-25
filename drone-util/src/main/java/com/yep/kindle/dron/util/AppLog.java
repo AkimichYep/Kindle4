@@ -39,6 +39,7 @@ public final class AppLog {
     // ── Initialisation ────────────────────────────────────────────────────────
 
     public static synchronized void init(String path, long maxBytes) {
+        KindleUtils.syncSystemTimeZone();
         filePath     = path;
         maxFileBytes = maxBytes;
         openFile();
